@@ -13,24 +13,24 @@ from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)            # size of memory replay buffer
-BATCH_SIZE = 128                  # min batch size
+BATCH_SIZE = 128                 # min batch size
 MIN_BUFFER_SIZE = BATCH_SIZE        # min buffer size before replay
-LR_ACTOR = 1e-3                   # learning rate
-LR_CRITIC = 1e-3                  # learning rate
+LR_ACTOR = 5e-4                   # learning rate
+LR_CRITIC = 1e-4                  # learning rate
 UNITS_ACTOR = (256,128)           # number of hidden units for actor inner layers
-UNITS_CRITIC = (256,128)          # number of hidden units for critic inner layers
+UNITS_CRITIC = (256,64)          # number of hidden units for critic inner layers
 GAMMA = 0.99                      # discount factor
 TAU = 1e-4                        # soft network update
 LEARN_EVERY = 1                   # how often to learn
-LEARN_LOOP = 4                    # how many learning cycle per visit
+LEARN_LOOP = 5                    # how many learning cycle per visit
 UPDATE_EVERY = 4                  # how many steps before updating the network
 USE_OUNOISE = True                # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 6.0              # noise scaling weight
-NOISE_WGT_DECAY = 0.9993          # noise decay rate per STEP
-NOISE_WGT_MIN = 0.01              # min noise scale
+NOISE_WGT_DECAY = 0.9995          # noise decay rate per STEP
+NOISE_WGT_MIN = 0.10              # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE  # when to start noise
-NOISE_DECAY_EVERY = 20            # noise reset step
-NOISE_RESET_EVERY = int(1e3)      # noise reset step
+NOISE_DECAY_EVERY = 100           # noise decay step
+NOISE_RESET_EVERY = int(2e3)      # noise reset step
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -49,7 +49,8 @@ class MADDPG:
                              for _ in range(num_agents)]
 
         # replay buffer
-        self.memory = ReplayBuffer(BUFFER_SIZE)
+        self.memory = ReplayBuffer(BUFFER_SIZE, num_agents, state_size, action_size,
+                                   BATCH_SIZE)
 
         # data structure for storing individual experience
         self.data = namedtuple("data", field_names=["states", "actions", "rewards",
@@ -159,7 +160,7 @@ class MADDPG:
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
 
-            if self.t_step % NOISE_RESET_EVERY ==0:
+            if self.t_step % NOISE_RESET_EVERY == 0:
                 self.noise_reset()
 
             if self.t_step % UPDATE_EVERY == 0: #sync network params values
@@ -185,8 +186,8 @@ class MADDPG:
         critic loss = mse(td_target - td_current)
         """
         # 1) compute td target of full next obversation
-        ns_full_actions = self.target_acts(ns) #input list of len num_agents [batch_size x state_size]
-        ns_full_actions = torch.cat(ns_full_actions, dim=-1).to(device) #batch_size x (action sizexnum_agents)
+        ns_actions = self.target_acts(ns) #input list of len num_agents [batch_size x state_size]
+        ns_full_actions = torch.cat(ns_actions, dim=1).to(device) #batch_size x (action sizexnum_agents)
 
         #ns_critic_input = torch.cat((ns_full,ns_full_actions), dim=-1).to(device)
         # batch size x (num_agent x (state_size + action size))
@@ -226,7 +227,7 @@ class MADDPG:
         #                 for i, ob in enumerate(s)]
 
         # combine latest prediction from 2 agents to form full actions
-        latest_a_full = torch.cat(latest_a_full, dim=-1).to(device)
+        latest_a_full = torch.cat(latest_a_full, dim=1).to(device)
 
         # actions has to be differtiable so that parameters can change
         # to produce an action that produce a higher critic score
@@ -255,9 +256,13 @@ class MADDPG:
 
 
 class ReplayBuffer:
-    def __init__(self,size):
+    def __init__(self, size, num_agents, state_size, action_size, batch_size):
         self.size = size
         self.memory = deque(maxlen=self.size)
+        self.num_agents = num_agents
+        self.state_size = state_size
+        self.action_size = action_size
+        self.batch_size = batch_size
 
     def add(self, data):
         """add into the buffer"""
@@ -267,19 +272,19 @@ class ReplayBuffer:
     def sample(self, batch_size, num_agents=2):
         """sample from the buffer"""
         # list(len=batchsize) of named tuples (of 5 fields)
-        #  [(s,a,r,d,ns),
-        #   (s,a,r,d,ns), # batch_size = 3
-        #   (s,a,r,d,ns)]
+        #  [(s1,a1,r1,d1,ns1),
+        #   (s2,a2,r2,d2,ns2), # batch_size = 3
+        #   (s3,a3,r3,d3,ns3)]
         samples = random.sample(self.memory, batch_size)
         #print(samples[0].states.shape) #2,24
 
         # list of 5 fields columns. Each columns have len=batchsize
         # len(samples_byF)=5; len(samples_byF[0])=64; len(samples_byF[0][0])=2
-        #  [(s,s,s),
-        #   (a,a,a),
-        #   (r,r,r),    # batch_size = 3
-        #   (d,d,d),
-        #   (ns,ns,ns)]
+        #  [(s1,s2,s3),
+        #   (a1,a2,a3),
+        #   (r1,r2,r3),    # batch_size = 3
+        #   (d1,d2,d3),
+        #   (ns1,ns2,ns3)]
         samples_by_fields = list(map(list, zip(*samples)))
 
         s = list(map(torch.stack, zip(*samples_by_fields[0])))
@@ -287,49 +292,22 @@ class ReplayBuffer:
         r = list(map(torch.stack, zip(*samples_by_fields[2])))
         d = list(map(torch.stack, zip(*samples_by_fields[3])))
         ns = list(map(torch.stack, zip(*samples_by_fields[4])))
-        #print(len(s1), len(s1[0]), s1[1][7].sum(), samples[7][0][1].sum())
-        #print(s1[0].shape)
 
+        s_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
+        ns_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
+        a_full = torch.zeros(self.batch_size, self.num_agents*self.action_size)
+        for i in range(self.batch_size):
+            for ai in range(self.num_agents):
+                s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
+                ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
+                a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
 
-        # cat all these 5 list input into a tensor
-        # (s1a, s1b)   -->    (s1a,s1b,s2a,s2b)
-        # (s2a, s2b)
-        #all_states = torch.cat(samples_by_fields[0]) #torch: (2 x batch_size), 24
-        #all_actions = torch.cat(samples_by_fields[1]) #torch: (2 x batch_size), 2
-        #all_rewards = torch.cat(samples_by_fields[2]) #torch: (2 x batch_size), 1
-        #all_dones = torch.cat(samples_by_fields[3]) #float torch: (2 x batch_size), 1
-        #all_next_states = torch.cat(samples_by_fields[4]) #torch: (2 x batch_size), 24
-
-        # separate agents input by odd/even entries
-
-        #s, a, r, d, ns = ([] for l in range(5))
-
-        # (1,2,3,4) -> (1,3)
-        #              (2,4)
-        #for i in range(num_agents): #list of len num_agents with items:
-        #    s.append(all_states[i::2]) #batch_size x 24
-        #    a.append(all_actions[i::2]) #batch_size x 2
-        #    r.append(all_rewards[i::2]) #batch_size x 1
-        #    d.append(all_dones[i::2]) #batch_size x 1
-        #    ns.append(all_next_states[i::2]) #batch_size x 24
-
-        s_full = torch.stack([torch.cat(si) for si in zip(*(_s for _s in s))]).to(device) #batchsize x (num_agentsxstate_size)
-        a_full = torch.stack([torch.cat(ai) for ai in zip(*(_a for _a in a))]).to(device) #batchsize x (num_agentsxaction_size)
-        ns_full = torch.stack([torch.cat(ni) for ni in zip(*(_n for _n in ns))]).to(device) #batchsize x (num_agentsxstate_size)
-
-        #for i in range(len(s)):
-        #    print(s1[i].sum())
-
-        #s_full_test = torch.zeros(batch_size, 48)
-        #
-        #for i in range(batch_size):
-        #    for a in range(2):
-        #        s_full_test[i,:24] = samples_by_fields[0][i][0]
-        #        s_full_test[i,24:] = samples_by_fields[0][i][1]
-        #print((s_full - s_full_test).sum())
+        #s_full = torch.stack([torch.cat(si) for si in zip(*(s[0],s[1]))]).to(device) #batchsize x (num_agentsxstate_size)
+        #a_full = torch.stack([torch.cat(ai) for ai in zip(*(_a for _a in a))]).to(device) #batchsize x (num_agentsxaction_size)
+        #ns_full = torch.stack([torch.cat(ni) for ni in zip(*(_n for _n in ns))]).to(device) #batchsize x (num_agentsxstate_size)
 
         # test the values are instact after transposing
-        assert(s_full[3,24:].sum() == s[1][3].sum() == samples[3].states[1].sum())
+        assert(s_full[5,24:].sum() == s[1][5].sum() == samples[5].states[1].sum())
 
         return (s_full, a_full, ns_full, s, a, r, d, ns)
 
