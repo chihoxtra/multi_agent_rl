@@ -12,25 +12,25 @@ from sa_ddpg import DDPGAgent
 from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
-BUFFER_SIZE = int(1e6)            # size of memory replay buffer
-BATCH_SIZE = 128                 # min batch size
-MIN_BUFFER_SIZE = BATCH_SIZE        # min buffer size before replay
-LR_ACTOR = 5e-4                   # learning rate
-LR_CRITIC = 1e-4                  # learning rate
-UNITS_ACTOR = (256,128)           # number of hidden units for actor inner layers
-UNITS_CRITIC = (256,64)          # number of hidden units for critic inner layers
-GAMMA = 0.99                      # discount factor
-TAU = 1e-4                        # soft network update
-LEARN_EVERY = 1                   # how often to learn
-LEARN_LOOP = 5                    # how many learning cycle per visit
-UPDATE_EVERY = 4                  # how many steps before updating the network
-USE_OUNOISE = True                # use OUnoise or else Gaussian noise
-NOISE_WGT_INIT = 6.0              # noise scaling weight
-NOISE_WGT_DECAY = 0.9995          # noise decay rate per STEP
-NOISE_WGT_MIN = 0.10              # min noise scale
-NOISE_DC_START = MIN_BUFFER_SIZE  # when to start noise
-NOISE_DECAY_EVERY = 100           # noise decay step
-NOISE_RESET_EVERY = int(2e3)      # noise reset step
+BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
+BATCH_SIZE = 128                         # min batch size
+MIN_BUFFER_SIZE = BATCH_SIZE             # min buffer size before replay
+LR_ACTOR = 1e-4                          # learning rate
+LR_CRITIC = 1e-4                         # learning rate
+UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
+UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
+GAMMA = 0.99                             # discount factor
+TAU = 1e-4                               # soft network update
+LEARN_EVERY = 1                          # how often to learn
+LEARN_LOOP = 2                           # how many learning cycle per visit
+UPDATE_EVERY = 4                         # how many steps before updating the network
+USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
+NOISE_WGT_INIT = 5.0                     # noise scaling weight
+NOISE_WGT_DECAY = 0.9995                 # noise decay rate per STEP
+NOISE_WGT_MIN = 0.05                     # min noise scale
+NOISE_DC_START = int(2e3)                # when to start noise
+NOISE_DECAY_EVERY = 100                  # noise decay step
+NOISE_RESET_EVERY = MIN_BUFFER_SIZE      # noise reset step
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -92,21 +92,16 @@ class MADDPG:
            outputs: (list) len = num_agents @each tensor of action_size
         """
         obs_all_agents = toTorch(obs_all_agents) #num_agents x space_size (24)
+        noise = self.add_noise()
 
+        actions = []
         with torch.no_grad():
-
-            actions = []
             for i in range(self.num_agents):
                 agent = self.maddpg_agent[i]
-                noise = self.add_noise()
-                action = agent._act(obs_all_agents[i,:], noise)
+                action = agent._act(obs_all_agents[i,:]) + noise.to(device).detach()
                 actions.append(action)
 
                 self.noise_history.append(noise.abs().mean())
-
-            #actions = [agent._act(obs, self.noise_scale)
-            #           for agent, obs
-            #           in zip(self.maddpg_agent, obs_all_agents)]
 
         return actions
 
@@ -115,18 +110,15 @@ class MADDPG:
            inputs: (array) #num_agents x space_size (24)
            outputs: (list) len = num_agents @each tensor of action_size
         """
+        target_actions = []
         with torch.no_grad():
-            target_actions = []
             for i in range(self.num_agents):
                 agent = self.maddpg_agent[i]
                 target_action = agent._target_act(obs_all_agents[i], self.noise_scale)
                 target_actions.append(target_action)
 
-            #target_actions = [ddpg_agent._target_act(obs)
-            #                  for ddpg_agent, obs
-            #                  in zip(self.maddpg_agent, obs_all_agents)]
-
         return target_actions
+
 
     def step(self, data):
         states, actions, rewards, dones, next_states = data
@@ -222,10 +214,6 @@ class MADDPG:
                 action = action.detach()
             latest_a_full.append(action)
 
-        #latest_a_full = [self.maddpg_agent[i].actor_local(ob) if i == agent_id \
-        #                 else self.maddpg_agent[i].actor_local(ob).detach()
-        #                 for i, ob in enumerate(s)]
-
         # combine latest prediction from 2 agents to form full actions
         latest_a_full = torch.cat(latest_a_full, dim=1).to(device)
 
@@ -240,12 +228,12 @@ class MADDPG:
         agent.actor_optimizer.zero_grad()
         actor_loss = -agent.critic_local(s_full, latest_a_full).mean()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
+        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.8)
         agent.actor_optimizer.step()
 
         # track historical data
-        self.ag_history.append(-actor_loss.data.detach()*100.)
-        self.cl_history.append(critic_loss.data.detach()*100)
+        self.ag_history.append(-actor_loss.data.detach()*1.e4)
+        self.cl_history.append(critic_loss.data.detach()*1.e4)
 
 
     def update_targets(self):

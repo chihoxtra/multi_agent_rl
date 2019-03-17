@@ -30,19 +30,17 @@ class DDPGAgent:
         self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor, weight_decay=0.0)
         self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=0.0) #weight_decay=1.e-5
 
-    def _act(self, obs, noise=0.00, use_bn=True):
+    def _act(self, obs, use_bn=True):
         obs = obs.to(device)
-
         if len(obs.shape)==1: #1D tensor cannot do batchnorm
             use_bn = False
 
-        action = self.actor_local(obs, use_bn=use_bn) + noise.to(device).detach()
+        action = self.actor_local(obs, use_bn=use_bn)
 
         return action
 
     def _target_act(self, obs, use_bn=True):
         obs = obs.to(device)
-
         if len(obs.shape)==1: #1D tensor cannot do batchnorm
             use_bn = False
 
