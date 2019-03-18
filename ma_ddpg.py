@@ -14,17 +14,17 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = BATCH_SIZE             # min buffer size before replay
-LR_ACTOR = 1e-4                          # learning rate
-LR_CRITIC = 1e-4                         # learning rate
+MIN_BUFFER_SIZE = BATCH_SIZE               # min buffer size before replay
+LR_ACTOR = 1e-5                          # learning rate
+LR_CRITIC = 1e-5                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
-LEARN_EVERY = 1                          # how often to learn
-LEARN_LOOP = 2                           # how many learning cycle per visit
+LEARN_EVERY = 1                          # how often to learn per step
+LEARN_LOOP = 2                           # how many learning cycle per learn
 UPDATE_EVERY = 4                         # how many steps before updating the network
-USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
+USE_OUNOISE = False                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
 NOISE_WGT_DECAY = 0.9995                 # noise decay rate per STEP
 NOISE_WGT_MIN = 0.05                     # min noise scale
@@ -39,6 +39,8 @@ class MADDPG:
         super(MADDPG, self).__init__()
         self.seed = torch.manual_seed(seed)
 
+        self.state_size = state_size
+        self.action_size = action_size
         self.min_buffer = MIN_BUFFER_SIZE
 
         self.num_agents = num_agents
@@ -92,13 +94,14 @@ class MADDPG:
            outputs: (list) len = num_agents @each tensor of action_size
         """
         obs_all_agents = toTorch(obs_all_agents) #num_agents x space_size (24)
-        noise = self.add_noise()
 
         actions = []
         with torch.no_grad():
+
             for i in range(self.num_agents):
                 agent = self.maddpg_agent[i]
-                action = agent._act(obs_all_agents[i,:]) + noise.to(device).detach()
+                noise = self.add_noise()
+                action = agent._act(obs_all_agents[i,:]) + noise.to(device)
                 actions.append(action)
 
                 self.noise_history.append(noise.abs().mean())
@@ -263,8 +266,26 @@ class ReplayBuffer:
         #  [(s1,a1,r1,d1,ns1),
         #   (s2,a2,r2,d2,ns2), # batch_size = 3
         #   (s3,a3,r3,d3,ns3)]
-        samples = random.sample(self.memory, batch_size)
+        #samples = random.sample(self.memory, batch_size)
+        sample_ind = np.random.choice(len(self.memory), batch_size)
         #print(samples[0].states.shape) #2,24
+
+        # get the selected experiences: avoid using mid list indexing
+        s_s, a_s, r_s, d_s, ns_s = ([] for l in range(5))
+
+        i = 0
+        while i < batch_size: #while loop is faster
+            self.memory.rotate(-sample_ind[i])
+            e = self.memory[0]
+            s_s.append(e.states)
+            a_s.append(e.actions)
+            r_s.append(e.rewards)
+            d_s.append(e.dones)
+            ns_s.append(e.next_states)
+            self.memory.rotate(sample_ind[i])
+            i += 1
+
+        #print(len(s))
 
         # list of 5 fields columns. Each columns have len=batchsize
         # len(samples_byF)=5; len(samples_byF[0])=64; len(samples_byF[0][0])=2
@@ -273,13 +294,15 @@ class ReplayBuffer:
         #   (r1,r2,r3),    # batch_size = 3
         #   (d1,d2,d3),
         #   (ns1,ns2,ns3)]
-        samples_by_fields = list(map(list, zip(*samples)))
+        #samples_by_fields = list(map(list, zip(*samples)))
 
-        s = list(map(torch.stack, zip(*samples_by_fields[0])))
-        a = list(map(torch.stack, zip(*samples_by_fields[1])))
-        r = list(map(torch.stack, zip(*samples_by_fields[2])))
-        d = list(map(torch.stack, zip(*samples_by_fields[3])))
-        ns = list(map(torch.stack, zip(*samples_by_fields[4])))
+        s = list(map(torch.stack, zip(*s_s)))
+        a = list(map(torch.stack, zip(*a_s)))
+        r = list(map(torch.stack, zip(*r_s)))
+        d = list(map(torch.stack, zip(*d_s)))
+        ns = list(map(torch.stack, zip(*ns_s)))
+
+        #assert(s[1][32].sum() == self.memory[sample_ind[32]].states[1].sum())
 
         s_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
         ns_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
@@ -295,7 +318,7 @@ class ReplayBuffer:
         #ns_full = torch.stack([torch.cat(ni) for ni in zip(*(_n for _n in ns))]).to(device) #batchsize x (num_agentsxstate_size)
 
         # test the values are instact after transposing
-        assert(s_full[5,24:].sum() == s[1][5].sum() == samples[5].states[1].sum())
+        #assert(s_full[5,24:].sum() == s[1][5].sum())
 
         return (s_full, a_full, ns_full, s, a, r, d, ns)
 
