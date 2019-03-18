@@ -14,23 +14,23 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = BATCH_SIZE             # min buffer size before replay
-LR_ACTOR = 1e-5                          # learning rate
-LR_CRITIC = 1e-5                         # learning rate
+MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
+LR_ACTOR = 1e-4                          # learning rate
+LR_CRITIC = 1e-4                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 5                           # how many learning cycle per learn
+LEARN_LOOP = 2                           # how many learning cycle per learn
 UPDATE_EVERY = 4                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
-NOISE_WGT_DECAY = 0.9995                 # noise decay rate per STEP
-NOISE_WGT_MIN = 0.05                     # min noise scale
-NOISE_DC_START = int(2e3)                # when to start noise
+NOISE_WGT_DECAY = 0.9999                 # noise decay rate per STEP
+NOISE_WGT_MIN = 0.1                      # min noise scale
+NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = 100                  # noise decay step
-NOISE_RESET_EVERY = MIN_BUFFER_SIZE      # noise reset step
+NOISE_RESET_EVERY = int(1e3)             # noise reset step
 
 #INIT_TD_ERROR = 1.0                      # initial value of td error
 
@@ -149,35 +149,9 @@ class MADDPG:
 
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
-
-                    s_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-                    ns_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-                    a_full = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
-
-                    s, a, r, d, ns = ([] for l in range(5))
-
-                    # get individual agent samples from their own memory
-                    for ai in range(self.num_agents): #do it agent by agent
-                        agent_samples = self.agent_memorys[ai].sample(BATCH_SIZE)
-                        (s_ai, a_ai, r_ai, d_ai, ns_ai) = agent_samples
-                        s.append(torch.stack(s_ai))
-                        a.append(torch.stack(a_ai))
-                        r.append(torch.stack(r_ai))
-                        d.append(torch.stack(d_ai))
-                        ns.append(torch.stack(ns_ai))
-                        
-                    assert(len(s) == self.num_agents)
-
-                    # prepare full obs and actions after collection
-                    for i in range(BATCH_SIZE):
-                        for ai in range(self.num_agents):
-                            s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
-                            ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
-                            a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
-
                     # learn by each agent
                     for ai in range(self.num_agents): #do it agent by agent
-                        agents_inputs = (s_full, a_full , ns_full, s, a, r, d, ns)
+                        agents_inputs = self.get_samples()
                         self.learn(agents_inputs, ai)
 
 
@@ -192,6 +166,33 @@ class MADDPG:
 
         self.t_step += 1
 
+    def get_samples(self):
+        """generates inputs from all agents for actor/critic network"""
+
+        # initialize variables
+        s_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+        ns_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+        a_full = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
+
+        s, a, r, d, ns = ([] for l in range(5))
+
+        # get individual agent samples from their own memory
+        for ai in range(self.num_agents): #do it agent by agent
+            (s_a, a_a, r_a, d_a, ns_a) = self.agent_memorys[ai].sample(BATCH_SIZE)
+
+            s.append(torch.stack(s_a))
+            a.append(torch.stack(a_a))
+            r.append(torch.stack(r_a))
+            d.append(torch.stack(d_a))
+            ns.append(torch.stack(ns_a))
+
+            # prepare full obs and actions after collection
+            for i in range(BATCH_SIZE):
+                s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
+                ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
+                a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
+
+        return (s_full, a_full , ns_full, s, a, r, d, ns)
 
     def learn(self, agents_inputs, agent_id):
         """update the critics and actors of all the agents """
@@ -215,7 +216,8 @@ class MADDPG:
 
         #ns_critic_input = torch.cat((ns_full,ns_full_actions), dim=-1).to(device)
         # batch size x (num_agent x (state_size + action size))
-        q_next_target = agent.critic_target(ns_full, ns_full_actions).to(device)
+        with torch.no_grad():
+            q_next_target = agent.critic_target(ns_full, ns_full_actions).to(device)
 
         td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id])
 
