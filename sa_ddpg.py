@@ -27,7 +27,7 @@ class DDPGAgent:
         hard_update(self.actor_target, self.actor_local)
         hard_update(self.critic_target, self.critic_local)
 
-        self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor, weight_decay=0.0)
+        self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor)
         self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=0.0) #weight_decay=1.e-5
 
     def _act(self, obs, use_bn=True):

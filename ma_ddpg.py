@@ -14,7 +14,7 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = BATCH_SIZE               # min buffer size before replay
+MIN_BUFFER_SIZE = BATCH_SIZE             # min buffer size before replay
 LR_ACTOR = 1e-5                          # learning rate
 LR_CRITIC = 1e-5                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
@@ -22,15 +22,17 @@ UNITS_CRITIC = (256,128)                 # number of hidden units for critic inn
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 2                           # how many learning cycle per learn
+LEARN_LOOP = 5                           # how many learning cycle per learn
 UPDATE_EVERY = 4                         # how many steps before updating the network
-USE_OUNOISE = False                       # use OUnoise or else Gaussian noise
+USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
 NOISE_WGT_DECAY = 0.9995                 # noise decay rate per STEP
 NOISE_WGT_MIN = 0.05                     # min noise scale
 NOISE_DC_START = int(2e3)                # when to start noise
 NOISE_DECAY_EVERY = 100                  # noise decay step
 NOISE_RESET_EVERY = MIN_BUFFER_SIZE      # noise reset step
+
+#INIT_TD_ERROR = 1.0                      # initial value of td error
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -50,9 +52,10 @@ class MADDPG:
                                        UNITS_ACTOR, UNITS_CRITIC, LR_ACTOR, LR_CRITIC, seed)
                              for _ in range(num_agents)]
 
-        # replay buffer
-        self.memory = ReplayBuffer(BUFFER_SIZE, num_agents, state_size, action_size,
-                                   BATCH_SIZE)
+        # list of replay buffer, separate buffer for each agent
+        self.agent_memorys = [ReplayBuffer(BUFFER_SIZE, num_agents, state_size, action_size,
+                                           BATCH_SIZE)
+                              for _ in range(num_agents)]
 
         # data structure for storing individual experience
         self.data = namedtuple("data", field_names=["states", "actions", "rewards",
@@ -126,17 +129,18 @@ class MADDPG:
     def step(self, data):
         states, actions, rewards, dones, next_states = data
 
-        # add experience to memory
-        e = self.data(toTorch(states), #num_agent x state_size
-                      actions, #tensor: #num_agent x actions size
-                      toTorch(rewards).unsqueeze(-1), #num_agent x 1
-                      toTorch(1.*np.array(dones)).unsqueeze(-1), #num_agent x 1
-                      toTorch(next_states)) #num_agent x state_size
+        # add experience of each agent to it's corresponding memory
+        for ai in range(self.num_agents):
+            e = self.data(toTorch(states[ai]), #num_agent x state_size
+                          actions[ai], #tensor: #num_agent x actions size
+                          toTorch(rewards[ai]).unsqueeze(-1), #num_agent x 1
+                          toTorch(1.*np.array(dones[ai])).unsqueeze(-1), #num_agent x 1
+                          toTorch(next_states[ai])) #num_agent x state_size
 
-        self.memory.add(e)
+            self.agent_memorys[ai].add(e)
 
         # size of memory large enough...
-        if len(self.memory) >= MIN_BUFFER_SIZE:
+        if len(self.agent_memorys[0]) >= MIN_BUFFER_SIZE:
             if self.is_training == False:
                 print("Prefetch completed. Training starts! \r")
                 print("Number of Agents: ", self.num_agents)
@@ -146,11 +150,36 @@ class MADDPG:
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
 
-                    for agent_id in range(self.num_agents): #do it agent by agent
+                    s_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+                    ns_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+                    a_full = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
 
-                        agent_inputs = self.memory.sample(BATCH_SIZE) #by fields
+                    s, a, r, d, ns = ([] for l in range(5))
 
-                        self.learn(agent_inputs, agent_id)
+                    # get individual agent samples from their own memory
+                    for ai in range(self.num_agents): #do it agent by agent
+                        agent_samples = self.agent_memorys[ai].sample(BATCH_SIZE)
+                        (s_ai, a_ai, r_ai, d_ai, ns_ai) = agent_samples
+                        s.append(torch.stack(s_ai))
+                        a.append(torch.stack(a_ai))
+                        r.append(torch.stack(r_ai))
+                        d.append(torch.stack(d_ai))
+                        ns.append(torch.stack(ns_ai))
+                        
+                    assert(len(s) == self.num_agents)
+
+                    # prepare full obs and actions after collection
+                    for i in range(BATCH_SIZE):
+                        for ai in range(self.num_agents):
+                            s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
+                            ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
+                            a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
+
+                    # learn by each agent
+                    for ai in range(self.num_agents): #do it agent by agent
+                        agents_inputs = (s_full, a_full , ns_full, s, a, r, d, ns)
+                        self.learn(agents_inputs, ai)
+
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
@@ -164,10 +193,10 @@ class MADDPG:
         self.t_step += 1
 
 
-    def learn(self, agent_inputs, agent_id):
+    def learn(self, agents_inputs, agent_id):
         """update the critics and actors of all the agents """
 
-        s_full, a_full , ns_full, s, a, r, d, ns = agent_inputs
+        s_full, a_full , ns_full, s, a, r, d, ns = agents_inputs
 
         agent = self.maddpg_agent[agent_id]
 
@@ -248,8 +277,7 @@ class MADDPG:
 
 class ReplayBuffer:
     def __init__(self, size, num_agents, state_size, action_size, batch_size):
-        self.size = size
-        self.memory = deque(maxlen=self.size)
+        self.memory = deque(maxlen=size)
         self.num_agents = num_agents
         self.state_size = state_size
         self.action_size = action_size
@@ -257,70 +285,29 @@ class ReplayBuffer:
 
     def add(self, data):
         """add into the buffer"""
-
         self.memory.append(data)
 
-    def sample(self, batch_size, num_agents=2):
+    def sample(self, batch_size):
         """sample from the buffer"""
-        # list(len=batchsize) of named tuples (of 5 fields)
-        #  [(s1,a1,r1,d1,ns1),
-        #   (s2,a2,r2,d2,ns2), # batch_size = 3
-        #   (s3,a3,r3,d3,ns3)]
-        #samples = random.sample(self.memory, batch_size)
         sample_ind = np.random.choice(len(self.memory), batch_size)
         #print(samples[0].states.shape) #2,24
 
         # get the selected experiences: avoid using mid list indexing
-        s_s, a_s, r_s, d_s, ns_s = ([] for l in range(5))
+        s_samp, a_samp, r_samp, d_samp, ns_samp = ([] for l in range(5))
 
         i = 0
         while i < batch_size: #while loop is faster
             self.memory.rotate(-sample_ind[i])
             e = self.memory[0]
-            s_s.append(e.states)
-            a_s.append(e.actions)
-            r_s.append(e.rewards)
-            d_s.append(e.dones)
-            ns_s.append(e.next_states)
+            s_samp.append(e.states)
+            a_samp.append(e.actions)
+            r_samp.append(e.rewards)
+            d_samp.append(e.dones)
+            ns_samp.append(e.next_states)
             self.memory.rotate(sample_ind[i])
             i += 1
 
-        #print(len(s))
-
-        # list of 5 fields columns. Each columns have len=batchsize
-        # len(samples_byF)=5; len(samples_byF[0])=64; len(samples_byF[0][0])=2
-        #  [(s1,s2,s3),
-        #   (a1,a2,a3),
-        #   (r1,r2,r3),    # batch_size = 3
-        #   (d1,d2,d3),
-        #   (ns1,ns2,ns3)]
-        #samples_by_fields = list(map(list, zip(*samples)))
-
-        s = list(map(torch.stack, zip(*s_s)))
-        a = list(map(torch.stack, zip(*a_s)))
-        r = list(map(torch.stack, zip(*r_s)))
-        d = list(map(torch.stack, zip(*d_s)))
-        ns = list(map(torch.stack, zip(*ns_s)))
-
-        #assert(s[1][32].sum() == self.memory[sample_ind[32]].states[1].sum())
-
-        s_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
-        ns_full = torch.zeros(self.batch_size, self.num_agents*self.state_size)
-        a_full = torch.zeros(self.batch_size, self.num_agents*self.action_size)
-        for i in range(self.batch_size):
-            for ai in range(self.num_agents):
-                s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
-                ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
-                a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
-
-        #s_full = torch.stack([torch.cat(si) for si in zip(*(s[0],s[1]))]).to(device) #batchsize x (num_agentsxstate_size)
-        #a_full = torch.stack([torch.cat(ai) for ai in zip(*(_a for _a in a))]).to(device) #batchsize x (num_agentsxaction_size)
-        #ns_full = torch.stack([torch.cat(ni) for ni in zip(*(_n for _n in ns))]).to(device) #batchsize x (num_agentsxstate_size)
-
-        # test the values are instact after transposing
-        #assert(s_full[5,24:].sum() == s[1][5].sum())
-
-        return (s_full, a_full, ns_full, s, a, r, d, ns)
+        return (s_samp, a_samp, r_samp, d_samp, ns_samp)
 
 
     def __len__(self):
