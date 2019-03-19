@@ -22,7 +22,7 @@ class ActorNet(nn.Module):
 
         self.fc4 = nn.Linear(hidden_dim[1],output_dim)
 
-        self.activation = f.relu #leaky_relu
+        self.activation = f.relu #relu
 
         self.reset_parameters()
 
@@ -38,7 +38,7 @@ class ActorNet(nn.Module):
         h2 = self.activation(self.fc2(h1))
         if use_bn: h2 = self.bn2(h2)
 
-        a = torch.clamp(torch.tanh(self.fc4(h2)), min=-1.0, max=1.0)
+        a = torch.clamp(torch.tanh(self.fc4(h2)), min=-1.0, max=+1.0)
         return a
 
 

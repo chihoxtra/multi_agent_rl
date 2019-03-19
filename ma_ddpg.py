@@ -12,27 +12,25 @@ from sa_ddpg import DDPGAgent
 from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
-BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
+BUFFER_SIZE = int(1e4)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
 MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
-LR_ACTOR = 1e-4                          # learning rate
-LR_CRITIC = 1e-4                         # learning rate
+LR_ACTOR = 1e-3                          # learning rate
+LR_CRITIC = 1e-3                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 2                           # how many learning cycle per learn
+LEARN_LOOP = 6                           # how many learning cycle per learn
 UPDATE_EVERY = 4                         # how many steps before updating the network
-USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
+USE_OUNOISE = False                      # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
 NOISE_WGT_DECAY = 0.9999                 # noise decay rate per STEP
 NOISE_WGT_MIN = 0.1                      # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
-NOISE_DECAY_EVERY = 100                  # noise decay step
+NOISE_DECAY_EVERY = 150                  # noise decay step
 NOISE_RESET_EVERY = int(1e3)             # noise reset step
-
-#INIT_TD_ERROR = 1.0                      # initial value of td error
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -48,14 +46,10 @@ class MADDPG:
         self.num_agents = num_agents
 
         # critic input = obs_full + actions = 14+2+2+2=20
-        self.maddpg_agent = [DDPGAgent(state_size, action_size, num_agents,
-                                       UNITS_ACTOR, UNITS_CRITIC, LR_ACTOR, LR_CRITIC, seed)
-                             for _ in range(num_agents)]
-
-        # list of replay buffer, separate buffer for each agent
-        self.agent_memorys = [ReplayBuffer(BUFFER_SIZE, num_agents, state_size, action_size,
-                                           BATCH_SIZE)
-                              for _ in range(num_agents)]
+        self.agents_list = [DDPGAgent(state_size, action_size, num_agents,
+                                      UNITS_ACTOR, UNITS_CRITIC, LR_ACTOR, LR_CRITIC,
+                                      BUFFER_SIZE, BATCH_SIZE, seed)
+                            for _ in range(num_agents)]
 
         # data structure for storing individual experience
         self.data = namedtuple("data", field_names=["states", "actions", "rewards",
@@ -102,7 +96,7 @@ class MADDPG:
         with torch.no_grad():
 
             for i in range(self.num_agents):
-                agent = self.maddpg_agent[i]
+                agent = self.agents_list[i]
                 noise = self.add_noise()
                 action = agent._act(obs_all_agents[i,:]) + noise.to(device)
                 actions.append(action)
@@ -119,7 +113,7 @@ class MADDPG:
         target_actions = []
         with torch.no_grad():
             for i in range(self.num_agents):
-                agent = self.maddpg_agent[i]
+                agent = self.agents_list[i]
                 target_action = agent._target_act(obs_all_agents[i], self.noise_scale)
                 target_actions.append(target_action)
 
@@ -137,10 +131,10 @@ class MADDPG:
                           toTorch(1.*np.array(dones[ai])).unsqueeze(-1), #num_agent x 1
                           toTorch(next_states[ai])) #num_agent x state_size
 
-            self.agent_memorys[ai].add(e)
+            self.agents_list[ai].memory.add(e)
 
         # size of memory large enough...
-        if len(self.agent_memorys[0]) >= MIN_BUFFER_SIZE:
+        if len(self.agents_list[0].memory) >= MIN_BUFFER_SIZE:
             if self.is_training == False:
                 print("Prefetch completed. Training starts! \r")
                 print("Number of Agents: ", self.num_agents)
@@ -149,11 +143,11 @@ class MADDPG:
 
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
+
                     # learn by each agent
                     for ai in range(self.num_agents): #do it agent by agent
                         agents_inputs = self.get_samples()
                         self.learn(agents_inputs, ai)
-
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
@@ -178,7 +172,7 @@ class MADDPG:
 
         # get individual agent samples from their own memory
         for ai in range(self.num_agents): #do it agent by agent
-            (s_a, a_a, r_a, d_a, ns_a) = self.agent_memorys[ai].sample(BATCH_SIZE)
+            (s_a, a_a, r_a, d_a, ns_a) = self.agents_list[ai].memory.sample(BATCH_SIZE)
 
             s.append(torch.stack(s_a))
             a.append(torch.stack(a_a))
@@ -192,6 +186,8 @@ class MADDPG:
                 ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
                 a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
 
+        assert(s_full[12,self.state_size:].sum() == s[1][12].sum())
+
         return (s_full, a_full , ns_full, s, a, r, d, ns)
 
     def learn(self, agents_inputs, agent_id):
@@ -199,7 +195,7 @@ class MADDPG:
 
         s_full, a_full , ns_full, s, a, r, d, ns = agents_inputs
 
-        agent = self.maddpg_agent[agent_id]
+        agent = self.agents_list[agent_id]
 
         ####################### CRITIC LOSS #########################
         """
@@ -243,7 +239,7 @@ class MADDPG:
         # detach the other agents to save computation saves some computation
         latest_a_full = []
         for i in range(self.num_agents):
-            action = self.maddpg_agent[i].actor_local(s[i])
+            action = self.agents_list[i].actor_local(s[i])
             if i != agent_id: # not the learning target
                 action = action.detach()
             latest_a_full.append(action)
@@ -272,45 +268,6 @@ class MADDPG:
 
     def update_targets(self):
         """soft update targets"""
-        for ddpg_agent in self.maddpg_agent:
+        for ddpg_agent in self.agents_list:
             soft_update(ddpg_agent.actor_target, ddpg_agent.actor_local, self.tau)
             soft_update(ddpg_agent.critic_target, ddpg_agent.critic_local, self.tau)
-
-
-class ReplayBuffer:
-    def __init__(self, size, num_agents, state_size, action_size, batch_size):
-        self.memory = deque(maxlen=size)
-        self.num_agents = num_agents
-        self.state_size = state_size
-        self.action_size = action_size
-        self.batch_size = batch_size
-
-    def add(self, data):
-        """add into the buffer"""
-        self.memory.append(data)
-
-    def sample(self, batch_size):
-        """sample from the buffer"""
-        sample_ind = np.random.choice(len(self.memory), batch_size)
-        #print(samples[0].states.shape) #2,24
-
-        # get the selected experiences: avoid using mid list indexing
-        s_samp, a_samp, r_samp, d_samp, ns_samp = ([] for l in range(5))
-
-        i = 0
-        while i < batch_size: #while loop is faster
-            self.memory.rotate(-sample_ind[i])
-            e = self.memory[0]
-            s_samp.append(e.states)
-            a_samp.append(e.actions)
-            r_samp.append(e.rewards)
-            d_samp.append(e.dones)
-            ns_samp.append(e.next_states)
-            self.memory.rotate(sample_ind[i])
-            i += 1
-
-        return (s_samp, a_samp, r_samp, d_samp, ns_samp)
-
-
-    def __len__(self):
-        return len(self.memory)
