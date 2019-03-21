@@ -1,8 +1,4 @@
-import os
 import torch
-import torch.nn.functional as F
-import torch.distributed as dist
-from torch.autograd import Variable
 import numpy as np
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -33,5 +29,3 @@ def hard_update(target, source):
     """
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(param.data)
-
-##### UN-USED #####

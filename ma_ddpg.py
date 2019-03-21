@@ -2,7 +2,6 @@
 MADDPG class coordinates flows, inputs and outputs across agents.
 Most of the actual work are done in individual agent level.
 """
-
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -14,9 +13,9 @@ from sa_ddpg import DDPGAgent
 from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
-BUFFER_SIZE = int(1e5)                   # size of memory replay buffer
+BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = BATCH_SIZE               # min buffer size before replay
+MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
 LR_ACTOR = 1e-3                          # learning rate
 LR_CRITIC = 1e-3                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
@@ -24,25 +23,24 @@ UNITS_CRITIC = (256,128)                 # number of hidden units for critic inn
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 4                           # how many learning cycle per learn
-UPDATE_EVERY = 10                        # how many steps before updating the network
+LEARN_LOOP = 10                          # how many learning cycle per learn
+UPDATE_EVERY = 5                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
-NOISE_WGT_DECAY = 0.9999                 # noise decay rate per STEP
-NOISE_WGT_MIN = 0.05                     # min noise scale
+NOISE_WGT_DECAY = 0.9998                 # noise decay rate per STEP
+NOISE_WGT_MIN = 0.1                      # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = int(1e3)             # noise decay step
 NOISE_RESET_EVERY = int(1e4)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
 
 ### PER related params, testing only
-USE_PER = False                          # flag indicates use of PER
+USE_PER = True                          # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.6                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
 TD_DEFAULT = 1.0                         # default TD error value
 TD_EPS = 1e-3                            # minimal td value to avoid zero prob.
-
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -53,8 +51,6 @@ class MADDPG:
 
         self.state_size = state_size
         self.action_size = action_size
-        self.min_buffer = MIN_BUFFER_SIZE
-
         self.num_agents = num_agents
 
         # critic input = obs_full + actions = 14+2+2+2=20
@@ -147,8 +143,8 @@ class MADDPG:
                 self.agents_list[ai].memory.add(e)
 
         # size of memory large enough...
-        #if len(self.agents_list[0].memory) >= MIN_BUFFER_SIZE:
-        if self.t_step >= MIN_BUFFER_SIZE:
+        if len(self.agents_list[0].memory) >= MIN_BUFFER_SIZE:
+        #if self.t_step >= MIN_BUFFER_SIZE:
             if self.is_training == False:
                 print("Prefetch completed. Training starts! \r")
                 print("Number of Agents: ", self.num_agents)
@@ -159,7 +155,7 @@ class MADDPG:
                 for _ in range(LEARN_LOOP):
                     # learn by each agent
                     for ai in range(self.num_agents): #do it agent by agent
-                        agents_inputs = self.get_samples()
+                        agents_inputs = self.get_all_samples()
                         self.learn(agents_inputs, ai)
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
@@ -176,7 +172,7 @@ class MADDPG:
 
         self.t_step += 1
 
-    def get_samples(self):
+    def get_all_samples(self):
         """generates inputs from all agents for actor/critic network to learn"""
 
         # initialize variables
@@ -207,6 +203,7 @@ class MADDPG:
 
             # prepare full obs and actions after collection
             for i in range(BATCH_SIZE):
+                assert(len(s)==ai+1)
                 s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
                 ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
                 a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
@@ -234,12 +231,15 @@ class MADDPG:
         critic loss = mse(td_target - td_current)
         """
         # 1) compute td target using ACTOR TARGET network in: ns->ns actions
-        ns_actions = self._target_acts(ns) #input list of len num_agents [batch_size x state_size]
-        ns_full_actions = torch.cat(ns_actions, dim=-1).to(device) #batch_size x (action sizexnum_agents)
-        assert(ns_full_actions.requires_grad==False)
+        ns_a = self._target_acts(ns) #input list of len num_agents [batch_size x state_size]
+        ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
+        assert(ns_a_full.requires_grad==False)
+
+        ### TESTING ### get action and ns action for this agent
+        ai_a_full = torch.cat((ns_a[agent_id],a[agent_id]),dim=-1).to(device)
 
         with torch.no_grad():
-            q_next_target = agent.critic_target(ns_full, ns_full_actions).to(device)
+            q_next_target = agent.critic_target(ns_full, ai_a_full).to(device)
 
         td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id])
 
@@ -265,26 +265,29 @@ class MADDPG:
         # 1) get the latest predicted actions with current states
         # noted that we are using LOCAL network as this is the real actor
         # detach the other agents to save computation saves some computation
-        latest_a_full = []
+        latest_actions = []
         for i in range(self.num_agents):
-            action = self.agents_list[i].actor_local(s[i])
+            latest_a = self.agents_list[i].actor_local(s[i])
             if i != agent_id: # not the learning target
-                action = action.detach()
-            latest_a_full.append(action)
-
+                latest_a = latest_a.detach()
+            latest_actions.append(latest_a)
 
         # combine latest prediction from 2 agents to form full actions
-        latest_a_full = torch.cat(latest_a_full, dim=1).to(device)
+        latest_action_full = torch.cat(latest_actions, dim=-1).to(device)
 
         # actions has to be differtiable so that parameters can change
         # to produce an action that produce a higher critic score
-        assert(latest_a_full.requires_grad==True)
+        assert(latest_action_full.requires_grad==True)
+
+        ### TESTING # get action and latest predicted action for this agent
+        latest_ai_a_full = torch.cat((latest_actions[agent_id],a[agent_id]),dim=-1).to(device)
+        assert(latest_ai_a_full.requires_grad==True)
 
         # 2) actions (by actor local network) feed to local critic for score
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
         agent.actor_optimizer.zero_grad()
-        actor_loss = -w[agent_id] * agent.critic_local(s_full, latest_a_full).mean()
+        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_ai_a_full).mean()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.5)
         agent.actor_optimizer.step()
@@ -301,6 +304,6 @@ class MADDPG:
 
     def update_targets(self):
         """soft update targets"""
-        for ddpg_agent in self.agents_list:
-            soft_update(ddpg_agent.actor_target, ddpg_agent.actor_local, self.tau)
-            soft_update(ddpg_agent.critic_target, ddpg_agent.critic_local, self.tau)
+        for agent in self.agents_list:
+            soft_update(agent.actor_target, agent.actor_local, self.tau)
+            soft_update(agent.critic_target, agent.critic_local, self.tau)

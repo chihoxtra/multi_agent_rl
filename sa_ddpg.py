@@ -112,7 +112,7 @@ class ReplayBuffer:
             d_samp.append(data.dones)
             ns_samp.append(data.next_states)
 
-        weight_n = toTorch(weight/np.max(max_weight)).mean() #change form
+        weight_n = toTorch(weight/np.max(weight)).mean() #change form
 
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, weight_n, sample_ind)
 
@@ -135,7 +135,7 @@ class ReplayBuffer:
             self.memory.rotate(sample_ind[i])
             i += 1
 
-        # last 2 values for functions compatibility
+        # last 2 values for functions compatibility with PER
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, 1.0, [])
 
     def update_tree(self, td_updated, index, p_replay_alpha, td_eps):
@@ -150,9 +150,8 @@ class ReplayBuffer:
         for i in range(len(index)):
             self.tree.update(index[i], td_updated[i])
 
-
     def __len__(self):
-        if self.use_PER:
+        if not self.use_PER:
             return len(self.memory)
         else:
             return self.leaves_count

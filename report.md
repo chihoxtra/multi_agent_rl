@@ -1,34 +1,47 @@
 
-## Key Learnings on Implementing Multi-agent DDPG for Unity Environment 'Tennis'
+## Key Learnings on Implementing Multi-agent DDPG for Unity Environment Cooperative Multi-agent Environment 'Tennis'
 
 ### Implementation Details
 
-#### A DDPG was deployed
-20-agent version was chosen for this task as more data could be collected to provide a better result.
+#### About the environment
+The environment involves 2 *independent* agents. Each of these agents control a tennis rack. These agents are not aware of the existence of the other agent. To gain score/reward, agent must control the rack to hit the tennis ball. However, in order to achieve the passing benchmark score threshold, these agents have to learn to bounce the tennis ball back and forth to maximize hitting the ball and hence reward/scores. Hence successfully trained agents should behave in a cooperative way. The goal of this training is to train these agents to cooperate to get a higher scores by bouncing the ball.
 
-DDPG (deep deterministic Policy Gradient) method was chosen for this task. The DDPG network model consist of 2 components, the actor network and the critic network.
+#### Multi-agent DDPG Actor-Critic Architecture
+To achieve the goal score, a multi-agent DDPG (deep deterministic Policy Gradient) Actor-Critic architecture was chosen.
 
-#### Actor Network
-The network takes the state as an input and output policy (actions). The 'gain' function is actually the Q value as estimated by the critic network. The 'goal' of this network is the find the corresponding action, given a state, that maximize the Q value as output by the critic network. Since this is a maximization function, gradient ASCENT was used instead of descent (default).
-Also since the action is in continuous form and the input state is a vector of 33 dimensions, a relatively more complicated network was deployed: A 2-layer fully connected dense with 256 neurons and 128 neurons was tested and chosen. As actions are within range of -1 to +1 and hence tanh activation was used in the last layer.
+![Mult-agent DDPG Actor Critic Architecture](https://github.com/chihoxtra/multi_agent_rl/blob/master/maddpg.png)
 
-#### Critic Network
-The critic network here serve as 'judge' to counter balance the estimation made by actor network. While the Actor network has all the incentive to maximize Q value come up by the critic network, the critic network tried to make sure the estimation is accurate. The critic network achieve this by taking the mean square loss of td error (td target - td current). This counterbalancing also make sure DDPG will not be subject to too much variance. Here a similar architecture was chosen with 2 layers of fully connected layers (256, 128) taking the state AND the action recommended by the actor network as input and output the estimated Q value.
+Similar to single-agent Actor Critic architecture, each agent has it's own actor and critic network. The actor network takes in the current state of agent and output a recommended action for that agent. However the critic part is slightly different from ordinary single-agent DDPG. Here the critic network of each agent not just tae in the state and action of that particular agent, but also states and actions of *all other* agents as well. Critic network has much higher visibility on what is happening while actor network can only access information related to its respective agent. The output of the critic network is, nevertheless, still the Q value estimated given an input state and an input action.
+
+The critic network is active only during training time. This network will be absent in running time.
+
+#### Experience Replay and target network
+Experience replay is deployed to maximize the utility of experience/trajectory gained during the interactions with environment. In this deployment, a separated experience memory buffer was deployed for each agent. The idea is to make sure there is enough randomness across sampling by avoiding coupling of experience entries across agents.
+
+Also in order to improve the stability of learning, a target network was deployed for both actor and critic network. Parameters of these target network are updated from time to time so that the active/learning/local network will have a relatively more stable 'target' to go for.
+
+#### Exploration using noise
+Noise was added to the action outputted by the actor network as a way of exploration. After conducting some researches, Ornstein-Uhlenbeck Noise was finally chosen. To make the 'learning cycle' across agents a bit more synchronized, a centralized noise generation process was used and the same magnitude of noise are added to each agents in each step. Scale of noise are initiated with relatively large magnitude and is gradually decayed to smaller magnitude until a minimal is reached. Noise is still added even after the minimal is reached. It is found that the environment is very sensitive to noise. A slightly change in magnitude of noise or its decay rate result in big difference in learning performance.
 
 #### Painstaking Tuning process
-Ultimately, successful training depends on the balance between these 2 network. Hence a similar architecture between these 2 are very important. If one of these network is super powerful compared to the other, then the training would fail. Here I also find that a very careful initialization, appropriate noise adding (as exploration, gradually decrease as we train), and batch normalization helped a lot. Last but not least, grad clipping was applied to both actor and critic network to provide a more stable performance.
+The biggest challenge here is synchronization. A well trained single agent is not good enough for passing the benchmark score unless the other agent is also well trained and behave correctly at the roughly the same time. During the initial stage of training, agents are not aware of the possibility of bouncing. They learned only to hit the ball falling off from the sky. And the reward is very limited. Agent only get a chance to learn bouncing when the other agent is able to hit the ball and send it to the other side of the court. Thus in a way agent has to be able to reach that 'able to bounce' stage together to make bouncing occur. To do that, both agents ideally should share a roughly similar learning cycle. That is when agent A is ready to bounce, B is also ready. And this is very difficult to achieve. Many attempts were made before a passing score were finally reached.
 
 #### Hyper Parameters chosen:
 Here are a summary of the hyper parameters used:
 <table width=600>
 <tr><td>Memory buffer size  </td><td> 1e6    </td></tr>     
-<tr><td>REPLAY_MIN_SIZE  </td><td>  1e5   </td></tr>
-<tr><td>Gamma  </td><td> 0.99    </td></tr>               
+<tr><td>Batch size </td><td>  128   </td></tr>
+<tr><td>Gamma  </td><td> 0.99    </td></tr>
+<tr><td>Actor LR  </td><td> 1e-3   </td></tr>
+<tr><td>Critic LR  </td><td> 1e-3   </td></tr>
+<tr><td>Actor Model  </td><td> (256,128)<br> Adam optimizer   </td></tr>
+<tr><td>Critic Model  </td><td> (256,128)<br> Adam optimizer    </td></tr>     
 <tr><td>Tau (soft update)  </td><td> 1e-3          </td></tr>           
-<tr><td>Learning Rate  </td><td>  1e-4  </td></tr>
-<tr><td>update target network frequency  </td><td> 2    </td></tr>
-<tr><td>Learning times per step  </td><td> 10    </td></tr>
+<tr><td>Learning Rate  </td><td>  1e-4   </td></tr>
+<tr><td>update target network frequency  </td><td> 10    </td></tr>
+<tr><td>Learning times per step  </td><td> 4    </td></tr>
 </table>
+
 
 #### The Result:
 After soooooo many different trial and errors, I am glad that I am finally able to reach an average score of over 30 (per episode) across all 20 agents over last 100 episodes at around episode 100th (the reason is that the agent is able to maintain a score of over 38 for around 60+ episodes and so after reaching 100 episodes, the average score is still greater than 30). <P>
