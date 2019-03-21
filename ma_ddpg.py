@@ -15,7 +15,7 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
+MIN_BUFFER_SIZE = int(1e5)               # min buffer size before replay
 LR_ACTOR = 1e-3                          # learning rate
 LR_CRITIC = 1e-3                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
@@ -35,7 +35,7 @@ NOISE_RESET_EVERY = int(1e4)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
 
 ### PER related params, testing only
-USE_PER = True                           # flag indicates use of PER
+USE_PER = False                          # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.6                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
@@ -174,11 +174,6 @@ class MADDPG:
     def get_all_samples(self):
         """generates inputs from all agents for actor/critic network to learn"""
 
-        # initialize variables
-        s_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-        ns_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-        a_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
-
         s, a, r, d, ns, w, ind = ([] for l in range(7))
 
         # get individual agent samples from their own memory
@@ -200,22 +195,12 @@ class MADDPG:
             w.append(w_a)
             ind.append(ind_a)
 
-        # prepare full obs and actions after collection
-        for ai in range(self.num_agents): #do it agent by agent
-            for i in range(BATCH_SIZE):
-                #assert(len(s)==ai+1)
-                s_full1[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
-                ns_full1[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
-                a_full1[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
-
         # cleaner implementation, checked values are consistent
         s_full = torch.stack([torch.cat(_s) for _s in zip(*(_ for _ in s))]).to(device) #batchsize x (num_agentsxstate_size)
         a_full = torch.stack([torch.cat(_a) for _a in zip(*(_ for _ in a))]).to(device) #batchsize x (num_agentsxstate_size)
         ns_full = torch.stack([torch.cat(_n) for _n in zip(*(_ for _ in ns))]).to(device) #batchsize x (num_agentsxstate_size)
-        assert(s_full.sum()==s_full1.sum())
-        assert(a_full.sum()==a_full1.sum())
-        assert(ns_full.sum()==ns_full1.sum())
 
+        # check data consistency
         rand_ind = np.random.randint(BATCH_SIZE)
         assert(s_full[rand_ind,self.state_size:].sum() == s[1][rand_ind].sum())
 
@@ -245,9 +230,10 @@ class MADDPG:
 
         ### TESTING ### get action and ns action for this agent
         ai_a_full = torch.cat((ns_a[agent_id],a[agent_id]),dim=-1).to(device)
+        assert(ai_a_full.requires_grad==False)
 
-        with torch.no_grad():
-            q_next_target = agent.critic_target(ns_full, ai_a_full).to(device)
+        with torch.no_grad(): #TESTING ns_a_full ai_a_full
+            q_next_target = agent.critic_target(ns_full, ns_a_full).to(device)
 
         td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id])
 
@@ -261,7 +247,7 @@ class MADDPG:
 
         agent.critic_optimizer.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 0.5)
+        #torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 0.5)
         agent.critic_optimizer.step()
 
         ####################### ACTOR LOSS #########################
@@ -294,10 +280,10 @@ class MADDPG:
         # 2) actions (by actor local network) feed to local critic for score
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
-        agent.actor_optimizer.zero_grad()
-        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_ai_a_full).mean()
+        agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, latest_ai_a_full
+        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full).mean()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.5)
+        #torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.5)
         agent.actor_optimizer.step()
 
         # update tree
