@@ -23,8 +23,8 @@ UNITS_CRITIC = (256,128)                 # number of hidden units for critic inn
 GAMMA = 0.99                             # discount factor
 TAU = 1e-4                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 10                          # how many learning cycle per learn
-UPDATE_EVERY = 5                         # how many steps before updating the network
+LEARN_LOOP = 4                           # how many learning cycle per learn
+UPDATE_EVERY = 4                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
 NOISE_WGT_DECAY = 0.9998                 # noise decay rate per STEP
@@ -35,7 +35,7 @@ NOISE_RESET_EVERY = int(1e4)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
 
 ### PER related params, testing only
-USE_PER = True                          # flag indicates use of PER
+USE_PER = True                           # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.6                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
@@ -97,8 +97,7 @@ class MADDPG:
            inputs: (np array) #num_agents x space_size (24)
            outputs: (list) len = num_agents @each tensor of action_size
         """
-        obs_all_agents = toTorch(obs_all_agents) #tensor: num_agents x space_size (24)
-
+        obs_all_agents = toTorch(obs_all_agents)
         actions = []
         with torch.no_grad():
             for i in range(self.num_agents):
@@ -176,9 +175,9 @@ class MADDPG:
         """generates inputs from all agents for actor/critic network to learn"""
 
         # initialize variables
-        s_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-        ns_full = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
-        a_full = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
+        s_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+        ns_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.state_size)
+        a_full1 = torch.zeros(BATCH_SIZE, self.num_agents*self.action_size)
 
         s, a, r, d, ns, w, ind = ([] for l in range(7))
 
@@ -201,12 +200,21 @@ class MADDPG:
             w.append(w_a)
             ind.append(ind_a)
 
-            # prepare full obs and actions after collection
+        # prepare full obs and actions after collection
+        for ai in range(self.num_agents): #do it agent by agent
             for i in range(BATCH_SIZE):
-                assert(len(s)==ai+1)
-                s_full[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
-                ns_full[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
-                a_full[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
+                #assert(len(s)==ai+1)
+                s_full1[i,ai*self.state_size:(ai+1)*self.state_size] = s[ai][i]
+                ns_full1[i,ai*self.state_size:(ai+1)*self.state_size] = ns[ai][i]
+                a_full1[i,ai*self.action_size:(ai+1)*self.action_size] = a[ai][i]
+
+        # cleaner implementation, checked values are consistent
+        s_full = torch.stack([torch.cat(_s) for _s in zip(*(_ for _ in s))]).to(device) #batchsize x (num_agentsxstate_size)
+        a_full = torch.stack([torch.cat(_a) for _a in zip(*(_ for _ in a))]).to(device) #batchsize x (num_agentsxstate_size)
+        ns_full = torch.stack([torch.cat(_n) for _n in zip(*(_ for _ in ns))]).to(device) #batchsize x (num_agentsxstate_size)
+        assert(s_full.sum()==s_full1.sum())
+        assert(a_full.sum()==a_full1.sum())
+        assert(ns_full.sum()==ns_full1.sum())
 
         rand_ind = np.random.randint(BATCH_SIZE)
         assert(s_full[rand_ind,self.state_size:].sum() == s[1][rand_ind].sum())
