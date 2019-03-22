@@ -21,6 +21,7 @@ class DDPGAgent:
         super(DDPGAgent, self).__init__()
         self.seed = torch.manual_seed(seed)
 
+        # num_agents*action_size
         self.actor_local = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_local = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
         self.actor_target = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)

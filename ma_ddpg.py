@@ -15,7 +15,7 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = int(1e5)               # min buffer size before replay
+MIN_BUFFER_SIZE = int(1e4)               # min buffer size before replay
 LR_ACTOR = 1e-3                          # learning rate
 LR_CRITIC = 1e-3                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
@@ -33,6 +33,8 @@ NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = int(1e3)             # noise decay step
 NOISE_RESET_EVERY = int(1e4)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
+REWARD_SCALE = False                     # use reward scaling
+REWARD_NORM = True                       # use reward normalizer
 
 ### PER related params, testing only
 USE_PER = False                          # flag indicates use of PER
@@ -73,6 +75,8 @@ class MADDPG:
 
         self.is_training = False
 
+        self.reward_history = deque(maxlen=int(1e6))
+
         # for tracking
         self.noise_history = deque(maxlen=100)
         self.cl_history = deque(maxlen=100)
@@ -80,7 +84,6 @@ class MADDPG:
 
         # for PER
         self.p_replay_beta = P_REPLAY_BETA
-
 
     def add_noise(self):
         if not USE_OUNOISE:
@@ -124,16 +127,26 @@ class MADDPG:
 
         return target_actions #list of num_agents; @batchsize x action size
 
+    def normalize_reward(self, r, scale=1.0, eps=1e-5):
+        # input r as tensor of batch size x 1
+        if REWARD_SCALE: scale = 10.0
+        mu = toTorch(np.mean(self.reward_history))
+        std = toTorch(np.std(self.reward_history))
+        r = scale * (r-mu)/(std+eps)
+        return r #output tensor
 
     def step(self, data):
         states, actions, rewards, dones, next_states = data
+
+        for ri in rewards:
+            self.reward_history.append(ri)
 
         # add experience of each agent to it's corresponding memory
         for ai in range(self.num_agents):
             e = self.data(toTorch(states[ai]), #num_agent x state_size
                           actions[ai], #tensor: #num_agent x actions size
                           toTorch(rewards[ai]).unsqueeze(-1), #num_agent x 1
-                          toTorch(1.*np.array(dones[ai])).unsqueeze(-1), #num_agent x 1
+                          toTorch(dones[ai]).unsqueeze(-1), #num_agent x 1
                           toTorch(next_states[ai])) #num_agent x state_size
 
             if USE_PER:
@@ -187,9 +200,15 @@ class MADDPG:
 
             (s_a, a_a, r_a, d_a, ns_a, w_a, ind_a) = data
 
+            # reward normalizer
+            if REWARD_NORM:
+                r_a = self.normalize_reward(torch.stack(r_a)) #output tensor, batchsize x 1
+            else:
+                r_a = torch.stack(r_a)
+
             s.append(torch.stack(s_a))
             a.append(torch.stack(a_a))
-            r.append(torch.stack(r_a))
+            r.append(r_a)
             d.append(torch.stack(d_a))
             ns.append(torch.stack(ns_a))
             w.append(w_a)
@@ -228,17 +247,27 @@ class MADDPG:
         ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
         assert(ns_a_full.requires_grad==False)
 
-        ### TESTING ### get action and ns action for this agent
-        ai_a_full = torch.cat((ns_a[agent_id],a[agent_id]),dim=-1).to(device)
-        assert(ai_a_full.requires_grad==False)
+        ### TEST OF CONCEPT： actions input for target network would be:
+        # next_state action of this agent + state action of other agent(s)
+        # idea is assuming actions of other agents not changed, what should be the
+        # expected td target for next state and next state action for this agent
+        _mixed_target_actions = []
+        for ai in range(self.num_agents):
+            if ai != agent_id:
+                _mixed_target_actions.append(ns_a[ai])
+            else:
+                _mixed_target_actions.append(a[ai])
 
-        with torch.no_grad(): #TESTING ns_a_full ai_a_full
-            q_next_target = agent.critic_target(ns_full, ns_a_full).to(device)
+        _mixed_target_actions = torch.cat((_mixed_target_actions),dim=-1).to(device)
+        assert(_mixed_target_actions.requires_grad==False)
 
-        td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id])
+        with torch.no_grad(): #TESTING ns_a_full _mixed_target_actions ns_a[agent_id]
+            q_next_target = agent.critic_target(ns_full, _mixed_target_actions).to(device)
 
-        # 2) compute td current using critic LOCAL network: in s full, a full, ns ai
-        td_current = agent.critic_local(s_full, a_full).to(device) #req_grad=false, false
+        td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id]) #batchsize x 1
+
+        # 2) compute td current using critic LOCAL network: in s full; a full, ns ai a[agent_id]
+        td_current = agent.critic_local(s_full, a_full).to(device)
         assert(td_current.requires_grad==True)
 
         # 3) compute the critic loss by minimizing td error
@@ -247,7 +276,7 @@ class MADDPG:
 
         agent.critic_optimizer.zero_grad()
         critic_loss.backward()
-        #torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 0.5)
+        torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 1.0)
         agent.critic_optimizer.step()
 
         ####################### ACTOR LOSS #########################
@@ -262,28 +291,32 @@ class MADDPG:
         latest_actions = []
         for i in range(self.num_agents):
             latest_a = self.agents_list[i].actor_local(s[i])
-            if i != agent_id: # not the learning target
-                latest_a = latest_a.detach()
+            #if i != agent_id: # not the learning target
+                #latest_a = latest_a.detach()
             latest_actions.append(latest_a)
 
         # combine latest prediction from 2 agents to form full actions
         latest_action_full = torch.cat(latest_actions, dim=-1).to(device)
-
-        # actions has to be differtiable so that parameters can change
-        # to produce an action that produce a higher critic score
         assert(latest_action_full.requires_grad==True)
 
         ### TESTING # get action and latest predicted action for this agent
-        latest_ai_a_full = torch.cat((latest_actions[agent_id],a[agent_id]),dim=-1).to(device)
-        assert(latest_ai_a_full.requires_grad==True)
+        _mixed_actions = []
+        for ai in range(self.num_agents):
+            if ai != agent_id:
+                _mixed_actions.append(latest_actions[ai])
+            else:
+                _mixed_actions.append(a[ai])
+
+        _mixed_actions = torch.cat(_mixed_actions,dim=-1).to(device)
+        assert(_mixed_actions.requires_grad==True)
 
         # 2) actions (by actor local network) feed to local critic for score
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
-        agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, latest_ai_a_full
-        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full).mean()
+        agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions, latest_actions[agent_id]
+        actor_loss = w[agent_id] * -agent.critic_local(s_full, _mixed_actions).mean()
         actor_loss.backward()
-        #torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.5)
+        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
         agent.actor_optimizer.step()
 
         # update tree
@@ -292,8 +325,8 @@ class MADDPG:
                                      P_REPLAY_ALPHA, TD_EPS)
 
         # track historical data
-        self.ag_history.append(-actor_loss.data.detach()*1.e4)
-        self.cl_history.append(critic_loss.data.detach()*1.e4)
+        self.ag_history.append(-actor_loss.data.detach())
+        self.cl_history.append(critic_loss.data.detach())
 
 
     def update_targets(self):
