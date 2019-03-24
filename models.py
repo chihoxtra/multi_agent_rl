@@ -22,7 +22,8 @@ class ActorNet(nn.Module):
 
         self.fc4 = nn.Linear(hidden_dim[1],output_dim)
 
-        self.activation = f.relu #relu
+        #self.activation = nn.PReLU() #leaky_relu relu
+        self.activation = f.relu # relu
 
         self.reset_parameters()
 
@@ -54,19 +55,20 @@ class CriticNet(nn.Module):
         self.fc2 = nn.Linear(hidden_dim[0]+full_action_dim, hidden_dim[1], bias=True)
         self.bn2 = nn.BatchNorm1d(hidden_dim[1])
 
-        #self.fc3 = nn.Linear(hidden_dim[1], hidden_dim[2], bias=True)
-        #self.bn3 = nn.BatchNorm1d(hidden_dim[2])
+        self.fc3 = nn.Linear(hidden_dim[1], hidden_dim[2], bias=True)
+        self.bn3 = nn.BatchNorm1d(hidden_dim[2])
 
         self.fc4 = nn.Linear(hidden_dim[-1],output_dim)
 
-        self.activation = f.relu #leaky_relu
+        self.activation = f.relu
+        #self.activation = nn.PReLU() # relu
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.fc1.weight.data.uniform_(*hidden_init(self.fc1))
         self.fc2.weight.data.uniform_(*hidden_init(self.fc2))
-        #self.fc3.weight.data.uniform_(*hidden_init(self.fc3))
+        self.fc3.weight.data.uniform_(*hidden_init(self.fc3))
         self.fc4.weight.data.uniform_(-3e-3, 3e-3)
 
     def forward(self, full_s, full_a, use_bn=True):
@@ -78,8 +80,8 @@ class CriticNet(nn.Module):
         h2 = self.activation(self.fc2(m1))
         if use_bn: h2 = self.bn2(h2)
 
-        #h3 = self.activation(self.fc3(h2))
-        #if use_bn: h3 = self.bn3(h3)
+        h3 = self.activation(self.fc3(h2))
+        if use_bn: h3 = self.bn3(h3)
 
-        v = self.fc4(h2)
+        v = self.activation(self.fc4(h3)) #pRELU
         return v
