@@ -23,7 +23,7 @@ UNITS_CRITIC = (256,128)                 # number of hidden units for critic inn
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 1                           # how many learning cycle per learn
+LEARN_LOOP = 6                           # how many learning cycle per learn
 UPDATE_EVERY = 10                        # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
@@ -69,23 +69,22 @@ class MADDPG:
         self.noise = OUNoise(action_size)
         self.noise_scale = NOISE_WGT_INIT
 
-        self.gamma = GAMMA
-        self.tau = TAU
-
         self.t_step = 0 # count number of steps went thru
 
         self.is_training = False
 
-        self.reward_history = deque(maxlen=int(1e6))
-
-        # for tracking
+        # for tracking and normalization
+        self.reward_history = deque(maxlen=int(1e5))
         self.noise_history = deque(maxlen=100)
         self.cl_history = deque(maxlen=100)
         self.ag_history = deque(maxlen=100)
 
-        # for PER
+        # for PER weight adjustment
         self.p_replay_beta = P_REPLAY_BETA
 
+    def print_params(self):
+        print("Number of Agents: ", self.num_agents)
+        print("Device: ", device)
         print("CRITIC_ACT_FORM: ", CRITIC_ACT_FORM)
         print("BATCH_SIZE: ", BATCH_SIZE)
         print("LR: ", LR_ACTOR)
@@ -147,10 +146,10 @@ class MADDPG:
     def step(self, data):
         states, actions, rewards, dones, next_states = data
 
-        for ri in rewards:
+        for ri in rewards: #list of scalar
             self.reward_history.append(ri)
 
-        # add experience of each agent to it's corresponding memory
+        # add experience of EACH agent to it's corresponding memory
         for ai in range(self.num_agents):
             e = self.data(toTorch(states[ai]), #num_agent x state_size
                           actions[ai], #tensor: #num_agent x actions size
@@ -165,19 +164,17 @@ class MADDPG:
 
         # size of memory large enough...
         if len(self.agents_list[0].memory) >= MIN_BUFFER_SIZE:
-        #if self.t_step >= MIN_BUFFER_SIZE:
             if self.is_training == False:
-                print("Prefetch completed. Training starts! \r")
-                print("Number of Agents: ", self.num_agents)
-                print("Device: ", device)
+                print("Prefetch experience completed. Training starts! \r")
+                self.print_params()
                 self.is_training = True
 
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
                     # learn by each agent
-                    for ai in range(self.num_agents): #do it agent by agent
+                    for agent_id in range(self.num_agents): #do it agent by agent
                         agents_inputs = self.get_all_samples()
-                        self.learn(agents_inputs, ai)
+                        self.learn(agents_inputs, agent_id)
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
@@ -185,7 +182,7 @@ class MADDPG:
             if self.t_step % NOISE_RESET_EVERY == 0:
                 self.noise_reset()
 
-            if self.t_step % UPDATE_EVERY == 0: #sync network params values
+            if self.t_step % UPDATE_EVERY == 0: #soft update target networks params
                 self.update_targets()
 
             if USE_PER and self.p_replay_beta < 1.0: #weight adjustment
@@ -211,7 +208,7 @@ class MADDPG:
 
             # reward normalizer
             if REWARD_NORM:
-                r_a = self.normalize_reward(torch.stack(r_a)) #output tensor, batchsize x 1
+                r_a = self.normalize_reward(r_a) #output tensor, batchsize x 1
 
             s.append(torch.stack(s_a).to(device))
             a.append(torch.stack(a_a).to(device))
@@ -353,12 +350,12 @@ class MADDPG:
             agent.memory.update_tree(td_error.detach().numpy(), ind[agent_id],
                                      P_REPLAY_ALPHA, TD_EPS)
         # track historical data
-        self.ag_history.append(-actor_loss.data.detach())
-        self.cl_history.append(critic_loss.data.detach())
+        self.ag_history.append(-actor_loss.mean().data.detach())
+        self.cl_history.append(critic_loss.mean().data.detach())
 
 
     def update_targets(self):
         """soft update targets"""
         for agent in self.agents_list:
-            soft_update(agent.actor_target, agent.actor_local, self.tau)
-            soft_update(agent.critic_target, agent.critic_local, self.tau)
+            soft_update(agent.actor_target, agent.actor_local, TAU)
+            soft_update(agent.critic_target, agent.critic_local, TAU)

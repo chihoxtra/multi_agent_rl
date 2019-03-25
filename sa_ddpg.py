@@ -22,9 +22,9 @@ class DDPGAgent:
         self.seed = torch.manual_seed(seed)
 
         # num_agents*action_size
-        self.actor_local = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
+        self.actor_local = ActorNet(1*state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_local = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
-        self.actor_target = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
+        self.actor_target = ActorNet(1*state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_target = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
 
         # initialize targets same as original networks
@@ -32,7 +32,7 @@ class DDPGAgent:
         hard_update(self.critic_target, self.critic_local)
 
         self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor)
-        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=0.0) #weight_decay=1.e-5
+        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=1.e-5) #weight_decay=1.e-5
 
         self.memory = ReplayBuffer(buffer_size, num_agents, state_size, action_size, use_PER)
 
