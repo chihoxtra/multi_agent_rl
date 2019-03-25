@@ -14,7 +14,7 @@ from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
-BATCH_SIZE = 1024                        # min batch size
+BATCH_SIZE = 128                         # min batch size
 MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
 LR_ACTOR = 1e-4                          # learning rate
 LR_CRITIC = 1e-4                         # learning rate
@@ -22,7 +22,7 @@ UNITS_ACTOR = (256,128)                  # number of hidden units for actor inne
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
-LEARN_EVERY = 4                          # how often to learn per step
+LEARN_EVERY = 1                          # how often to learn per step
 LEARN_LOOP = 1                           # how many learning cycle per learn
 UPDATE_EVERY = 10                        # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
@@ -33,7 +33,7 @@ NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = int(1e3)             # noise decay step
 NOISE_RESET_EVERY = int(1e4)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
-REWARD_SCALE = True                      # use reward scaling
+REWARD_SCALE = 10.0                      # use reward scaling
 REWARD_NORM = True                       # use reward normalizer
 CRITIC_ACT_FORM = 3                      # [1,2,3] actions form for critic network (testing)
 
@@ -90,6 +90,7 @@ class MADDPG:
         print("BATCH_SIZE: ", BATCH_SIZE)
         print("LR: ", LR_ACTOR)
         print("REWARD_SCALE: ", REWARD_SCALE)
+        print("LEARN_EVERY: ", LEARN_EVERY)
         print("LEARN_LOOP: ", LEARN_LOOP)
         print("UNITS_ACTOR: ", UNITS_ACTOR)
         print("UNITS_CRITIC: ", UNITS_CRITIC)
@@ -136,13 +137,12 @@ class MADDPG:
 
         return target_actions #list of num_agents; @batchsize x action size
 
-    def normalize_reward(self, r, scale=1.0, eps=1e-5):
-        # input r as tensor of batch size x 1
-        if REWARD_SCALE: scale = 10.0
-        mu = toTorch(np.mean(self.reward_history))
-        std = toTorch(np.std(self.reward_history))
-        r = scale * (r-mu)/(std+eps)
-        return r #output tensor
+    def normalize_reward(self, r, eps=1e-5):
+        # input r as list of tensor len=batchsize @ tensor 1
+        mu = toTorch(self.reward_history).mean()
+        std = toTorch(self.reward_history).std()
+        r = [(ri-mu)/(std+eps) for ri in r]
+        return r #list of tensor
 
     def step(self, data):
         states, actions, rewards, dones, next_states = data
@@ -212,14 +212,12 @@ class MADDPG:
             # reward normalizer
             if REWARD_NORM:
                 r_a = self.normalize_reward(torch.stack(r_a)) #output tensor, batchsize x 1
-            else:
-                r_a = torch.stack(r_a)
 
-            s.append(torch.stack(s_a))
-            a.append(torch.stack(a_a))
-            r.append(r_a)
-            d.append(torch.stack(d_a))
-            ns.append(torch.stack(ns_a))
+            s.append(torch.stack(s_a).to(device))
+            a.append(torch.stack(a_a).to(device))
+            r.append(REWARD_SCALE*torch.stack(r_a).to(device))
+            d.append(torch.stack(d_a).to(device))
+            ns.append(torch.stack(ns_a).to(device))
             w.append(w_a)
             ind.append(ind_a)
 
@@ -258,7 +256,7 @@ class MADDPG:
             ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
 
         ### TEST OF CONCEPTS ###
-        # method 2) next state of THIS agent + current action of other agents
+        # method 2) next state action of THIS agent + current action of OTHER agents
         if CRITIC_ACT_FORM == 2:
             ns_a_full = [] #ai==0: (ns0, a1); ai==1: (a0,ns1);from a0 a1
             for ai in range(self.num_agents):
@@ -268,7 +266,7 @@ class MADDPG:
                     ns_a_full.append(a[ai].to(device))
             ns_a_full = torch.cat((ns_a_full),dim=-1)
 
-        # method 3) next state of THIS agent + current action of THIS agent
+        # method 3) next state action of THIS agent + current action of THIS agent
         if CRITIC_ACT_FORM == 3:
             ns_a_full = [] #ai==0: (ns0, a0); ai==1: (a1,ns1);from a0 a1
             for ai in range(self.num_agents):
