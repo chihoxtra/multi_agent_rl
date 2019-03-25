@@ -83,5 +83,5 @@ class CriticNet(nn.Module):
         #h3 = self.activation(self.fc3(h2))
         #if use_bn: h3 = self.bn3(h3)
 
-        v = self.activation(self.fc4(h2)) #pRELU
+        v = self.PReLU(self.fc4(h2)) #pRELU
         return v

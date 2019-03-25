@@ -16,14 +16,14 @@ from utilities import toTorch, soft_update
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
 MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
-LR_ACTOR = 1e-4                          # learning rate
-LR_CRITIC = 1e-4                         # learning rate
+LR_ACTOR = 1e-3                          # learning rate
+LR_CRITIC = 1e-3                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 6                           # how many learning cycle per learn
+LEARN_LOOP = 5                           # how many learning cycle per learn
 UPDATE_EVERY = 10                        # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
@@ -57,10 +57,12 @@ class MADDPG:
         self.num_agents = num_agents
 
         # critic input = obs_full + actions = 14+2+2+2=20
-        self.agents_list = [DDPGAgent(state_size, action_size, num_agents,
-                                      UNITS_ACTOR, UNITS_CRITIC, LR_ACTOR, LR_CRITIC,
-                                      BUFFER_SIZE, USE_PER, seed)
-                            for _ in range(num_agents)]
+        self.agents_list = []
+        for ai in range(self.num_agents):
+            agent = DDPGAgent(state_size, action_size, num_agents,
+                              UNITS_ACTOR, UNITS_CRITIC, LR_ACTOR, LR_CRITIC,
+                              BUFFER_SIZE, ai, USE_PER, seed)
+            self.agents_list.append(agent)
 
         # data structure for storing individual experience
         self.data = namedtuple("data", field_names=["states", "actions", "rewards",
@@ -112,10 +114,10 @@ class MADDPG:
         obs_all_agents = toTorch(obs_all_agents)
         actions = []
         with torch.no_grad():
-            for i in range(self.num_agents):
-                agent = self.agents_list[i]
+            for ai in range(self.num_agents):
+                agent = self.agents_list[ai]
                 noise = self.add_noise()
-                action = agent._act(obs_all_agents[i], USE_BATCHNORM) + noise.to(device)
+                action = agent._act(obs_all_agents[ai], USE_BATCHNORM) + noise.to(device)
                 actions.append(action)
 
                 self.noise_history.append(noise.abs().mean())
@@ -129,9 +131,9 @@ class MADDPG:
         """
         target_actions = []
         with torch.no_grad():
-            for i in range(self.num_agents):
-                agent = self.agents_list[i]
-                target_action = agent._target_act(obs_all_agents[i], USE_BATCHNORM)
+            for ai in range(self.num_agents):
+                agent = self.agents_list[ai]
+                target_action = agent._target_act(obs_all_agents[ai], USE_BATCHNORM)
                 target_actions.append(target_action)
 
         return target_actions #list of num_agents; @batchsize x action size
@@ -172,9 +174,9 @@ class MADDPG:
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
                     # learn by each agent
-                    for agent_id in range(self.num_agents): #do it agent by agent
+                    for ai in range(self.num_agents): #do it agent by agent
                         agents_inputs = self.get_all_samples()
-                        self.learn(agents_inputs, agent_id)
+                        self.learn(agents_inputs, ai)
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)

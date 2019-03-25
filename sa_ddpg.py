@@ -16,10 +16,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class DDPGAgent:
     def __init__(self, state_size, action_size, num_agents,
                  hidden_actor, hidden_critic, lr_actor, lr_critic,
-                 buffer_size, use_PER=False, seed=0):
+                 buffer_size, agent_id, use_PER=False, seed=0):
 
         super(DDPGAgent, self).__init__()
         self.seed = torch.manual_seed(seed)
+        self.agent_id = agent_id
 
         # num_agents*action_size
         self.actor_local = ActorNet(1*state_size, hidden_actor, action_size, seed=seed).to(device)
@@ -68,7 +69,7 @@ class ReplayBuffer:
         self.leaves_count = 0
 
     def add_tree(self, e, td_error=1.0):
-        """Add a new experience to memory. td_error: abs value"""
+        """PER function. Add a new experience to memory. td_error: abs value"""
         self.tree.add(td_error, e)
         self.leaves_count = min(self.leaves_count+1,self.buffer_size)
 
@@ -77,6 +78,7 @@ class ReplayBuffer:
         self.memory.append(data)
 
     def sample_tree(self, batch_size, p_replay_beta, td_eps=1e-3):
+        """PER function. Segment piece wise sampling"""
         s_samp, a_samp, r_samp, d_samp, ns_samp = ([] for l in range(5))
 
         sample_ind = np.empty((batch_size,), dtype=np.int32)
@@ -140,7 +142,7 @@ class ReplayBuffer:
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, 1.0, [])
 
     def update_tree(self, td_updated, index, p_replay_alpha, td_eps):
-        """
+        """ PER function.
         update the td error values while restoring orders
         td_updated: abs value; np.array of shape 1,batch_size,1
         index: in case of tree, it is the leaf index
