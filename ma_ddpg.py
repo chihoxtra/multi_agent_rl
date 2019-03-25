@@ -14,21 +14,21 @@ from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
-BATCH_SIZE = 256                         # min batch size
+BATCH_SIZE = 1024                        # min batch size
 MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
-LR_ACTOR = 1e-3                          # learning rate
-LR_CRITIC = 1e-3                         # learning rate
+LR_ACTOR = 1e-4                          # learning rate
+LR_CRITIC = 1e-4                         # learning rate
 UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
-UNITS_CRITIC = (256,64,32)               # number of hidden units for critic inner layers
+UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
-TAU = 1e-4                               # soft network update
-LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 2                           # how many learning cycle per learn
-UPDATE_EVERY = 1                         # how many steps before updating the network
+TAU = 1e-3                               # soft network update
+LEARN_EVERY = 4                          # how often to learn per step
+LEARN_LOOP = 1                           # how many learning cycle per learn
+UPDATE_EVERY = 10                        # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
-NOISE_WGT_DECAY = 0.9996                 # noise decay rate per STEP
-NOISE_WGT_MIN = 0.1                      # min noise scale
+NOISE_WGT_DECAY = 0.9998                 # noise decay rate per STEP
+NOISE_WGT_MIN = 0.15                     # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = int(1e3)             # noise decay step
 NOISE_RESET_EVERY = int(1e4)             # noise reset step
@@ -263,29 +263,29 @@ class MADDPG:
             ns_a_full = [] #ai==0: (ns0, a1); ai==1: (a0,ns1);from a0 a1
             for ai in range(self.num_agents):
                 if ai == agent_id:
-                    ns_a_full.append(ns_a[ai])
+                    ns_a_full.append(ns_a[ai].to(device))
                 else:
-                    ns_a_full.append(a[ai])
-            ns_a_full = torch.cat((ns_a_full),dim=-1).to(device)
+                    ns_a_full.append(a[ai].to(device))
+            ns_a_full = torch.cat((ns_a_full),dim=-1)
 
         # method 3) next state of THIS agent + current action of THIS agent
         if CRITIC_ACT_FORM == 3:
             ns_a_full = [] #ai==0: (ns0, a0); ai==1: (a1,ns1);from a0 a1
             for ai in range(self.num_agents):
                 if ai == agent_id:
-                    ns_a_full.append(ns_a[agent_id])
+                    ns_a_full.append(ns_a[agent_id].to(device))
                 else:
-                    ns_a_full.append(a[agent_id])
-            ns_a_full = torch.cat((ns_a_full),dim=-1).to(device)
+                    ns_a_full.append(a[agent_id].to(device))
+            ns_a_full = torch.cat((ns_a_full),dim=-1)
 
         assert(ns_a_full.requires_grad==False)
 
-        with torch.no_grad(): #TESTING ns_a_full _mixed_target_actions
+        with torch.no_grad(): #TESTING ns_a_full ns_a_full ns_a[agent_id]
             q_next_target = agent.critic_target(ns_full, ns_a_full).to(device)
 
         td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id]) #batchsize x 1
 
-        # 2) compute td current using critic LOCAL network: in s full; a full, ns ai a[agent_id]
+        # 2) compute td current using critic LOCAL network: in s full; a_full, a[agent_id]
         td_current = agent.critic_local(s_full, a_full).to(device)
         assert(td_current.requires_grad==True)
 
@@ -311,7 +311,7 @@ class MADDPG:
         latest_actions = []
         for i in range(self.num_agents):
             latest_a = self.agents_list[i].actor_local(s[i])
-            latest_actions.append(latest_a)
+            latest_actions.append(latest_a.to(device))
 
         # combine latest actions prediction from 2 agents -> full actions
         if CRITIC_ACT_FORM == 1:
@@ -323,9 +323,9 @@ class MADDPG:
             latest_action_full = []
             for ai in range(self.num_agents):
                 if ai == agent_id:
-                    latest_action_full.append(latest_actions[ai])
+                    latest_action_full.append(latest_actions[ai].to(device))
                 else:
-                    latest_action_full.append(a[ai])
+                    latest_action_full.append(a[ai].to(device))
             latest_action_full = torch.cat(latest_action_full,dim=-1).to(device)
 
         # method 3) next state of THIS agent + current action of THIS agent
@@ -333,9 +333,9 @@ class MADDPG:
             latest_action_full = []
             for ai in range(self.num_agents):
                 if ai == agent_id:
-                    latest_action_full.append(latest_actions[agent_id])
+                    latest_action_full.append(latest_actions[agent_id].to(device))
                 else:
-                    latest_action_full.append(a[agent_id])
+                    latest_action_full.append(a[agent_id].to(device))
 
             latest_action_full = torch.cat(latest_action_full,dim=-1).to(device)
 
@@ -344,7 +344,7 @@ class MADDPG:
         # 2) actions (by actor local network) feed to local critic for score
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
-        agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions
+        agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions, latest_actions[agent_id]
         actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full).mean()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
