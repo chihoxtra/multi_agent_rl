@@ -15,23 +15,23 @@ from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
-MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
-LR_ACTOR = 1e-3                          # learning rate
-LR_CRITIC = 1e-3                         # learning rate
-UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
+MIN_BUFFER_SIZE = int(5e3)               # min buffer size before replay
+LR_ACTOR = 5e-4                          # learning rate
+LR_CRITIC = 5e-4                         # learning rate
+UNITS_ACTOR = (256,256)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
 LEARN_LOOP = 5                           # how many learning cycle per learn
-UPDATE_EVERY = 10                        # how many steps before updating the network
+UPDATE_EVERY = 1                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
-NOISE_WGT_DECAY = 0.9998                 # noise decay rate per STEP
+NOISE_WGT_DECAY = 0.9997                 # noise decay rate per STEP
 NOISE_WGT_MIN = 0.15                     # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
-NOISE_DECAY_EVERY = int(1e3)             # noise decay step
-NOISE_RESET_EVERY = int(1e4)             # noise reset step
+NOISE_DECAY_EVERY = 20                   # noise decay step
+NOISE_RESET_EVERY = int(1e3)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
 REWARD_SCALE = 10.0                      # use reward scaling
 REWARD_NORM = True                       # use reward normalizer
@@ -178,7 +178,7 @@ class MADDPG:
                         agents_inputs = self.get_all_samples()
                         self.learn(agents_inputs, ai)
 
-            if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY:
+            if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY == 0:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
 
             if self.t_step % NOISE_RESET_EVERY == 0:
