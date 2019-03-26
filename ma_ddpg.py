@@ -17,28 +17,28 @@ BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 128                         # min batch size
 MIN_BUFFER_SIZE = int(5e3)               # min buffer size before replay
 LR_ACTOR = 5e-4                          # learning rate
-LR_CRITIC = 5e-4                         # learning rate
-UNITS_ACTOR = (256,256)                  # number of hidden units for actor inner layers
+LR_CRITIC = 1e-4                         # learning rate
+UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
 UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 1                          # how often to learn per step
-LEARN_LOOP = 5                           # how many learning cycle per learn
+LEARN_LOOP = 4                           # how many learning cycle per learn
 UPDATE_EVERY = 1                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
 NOISE_WGT_INIT = 5.0                     # noise scaling weight
-NOISE_WGT_DECAY = 0.9997                 # noise decay rate per STEP
+NOISE_WGT_DECAY = 0.9993                 # noise decay rate per STEP
 NOISE_WGT_MIN = 0.15                     # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
-NOISE_DECAY_EVERY = 20                   # noise decay step
-NOISE_RESET_EVERY = int(1e3)             # noise reset step
+NOISE_DECAY_EVERY = 5                    # noise decay step
+NOISE_RESET_EVERY = int(2e3)             # noise reset step
 USE_BATCHNORM = False                    # use batch norm?
 REWARD_SCALE = 10.0                      # use reward scaling
 REWARD_NORM = True                       # use reward normalizer
 CRITIC_ACT_FORM = 3                      # [1,2,3] actions form for critic network (testing)
 
 ### PER related params, testing only
-USE_PER = False                          # flag indicates use of PER
+USE_PER = True                          # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.6                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
@@ -95,6 +95,10 @@ class MADDPG:
         print("LEARN_LOOP: ", LEARN_LOOP)
         print("UNITS_ACTOR: ", UNITS_ACTOR)
         print("UNITS_CRITIC: ", UNITS_CRITIC)
+        print("NOISE_WGT_DECAY: ", NOISE_WGT_DECAY)
+        print("NOISE_DECAY_EVERY: ", NOISE_DECAY_EVERY)
+        print("NOISE_WGT_MIN: ", NOISE_WGT_MIN)
+        print("USE_PER: ", USE_PER)
 
     def add_noise(self):
         if not USE_OUNOISE:
@@ -292,7 +296,7 @@ class MADDPG:
 
         agent.critic_optimizer.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(agent.critic_local.parameters(), 0.5)
         agent.critic_optimizer.step()
 
         ####################### ACTOR LOSS #########################
