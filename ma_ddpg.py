@@ -26,9 +26,9 @@ LEARN_EVERY = 1                          # how often to learn per step
 LEARN_LOOP = 4                           # how many learning cycle per learn
 UPDATE_EVERY = 1                         # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
-NOISE_WGT_INIT = 5.0                     # noise scaling weight
+NOISE_WGT_INIT = 4.5                     # noise scaling weight
 NOISE_WGT_DECAY = 0.9993                 # noise decay rate per STEP
-NOISE_WGT_MIN = 0.15                     # min noise scale
+NOISE_WGT_MIN = 0.2                      # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
 NOISE_DECAY_EVERY = 5                    # noise decay step
 NOISE_RESET_EVERY = int(2e3)             # noise reset step
@@ -99,6 +99,7 @@ class MADDPG:
         print("NOISE_DECAY_EVERY: ", NOISE_DECAY_EVERY)
         print("NOISE_WGT_MIN: ", NOISE_WGT_MIN)
         print("USE_PER: ", USE_PER)
+        print("USE_BATCHNORM: ", USE_BATCHNORM)
 
     def add_noise(self):
         if not USE_OUNOISE:
@@ -348,7 +349,7 @@ class MADDPG:
         agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions, latest_actions[agent_id]
         actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full).mean()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
+        torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),0.5)
         agent.actor_optimizer.step()
 
         # update tree
