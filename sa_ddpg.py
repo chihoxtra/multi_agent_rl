@@ -82,43 +82,38 @@ class ReplayBuffer:
 
     def add_tree(self, data, td_default=1.0):
         """PER function. Add a new experience to memory. td_error: abs value"""
-        td_error = np.max(self.tree.tree[-self.buffer_size:])
-        if td_error == 0.0:
-            td_error = td_default
-        self.tree.add(td_error, data)
+        td_max = np.max(self.tree.tree[-self.buffer_size:])
+        if td_max == 0.0:
+            td_max = td_default
+        self.tree.add(td_max, data) #increase chance to be selected
         self.leaves_count = min(self.leaves_count+1,self.buffer_size)
 
     def add(self, data):
         """add into the buffer"""
         self.memory.append(data)
 
-    def sample_tree(self, batch_size, p_replay_beta, td_eps=1e-3):
+    def sample_tree(self, batch_size, p_replay_beta, td_eps=1e-4):
         """PER function. Segment piece wise sampling"""
         s_samp, a_samp, r_samp, d_samp, ns_samp = ([] for l in range(5))
 
         sample_ind = np.empty((batch_size,), dtype=np.int32)
         weight = np.empty((batch_size, 1))
 
-        # priority segments across td score range
+        # create segments according to td score range
         td_score_segment = self.tree.total_td_score / batch_size
-
-        # Calculating the max_weight
-        #p_min = np.min(self.tree.tree[-self.buffer_size:]) / self.tree.total_td_score
-        #if p_min == 0:
-        #    p_min = td_eps # avoid div by zero
-        #max_weight = (p_min * self.buffer_size) ** (-p_replay_beta)
 
         for i in range(batch_size):
             # A value is uniformly sample from each range
-            a, b = td_score_segment * i, td_score_segment * (i + 1)
-            value = np.random.uniform(a, b)
+            _start, _end = i * td_score_segment, (i + 1) * td_score_segment
+            value = np.random.uniform(_start, _end)
 
-            # Experience that correspond to each value is retrieved
+            # get the experience with the closest value in that segment
             leaf_index, td_score, data = self.tree.get_leaf(value)
 
+            # the sampling prob for this sample across all tds
             sampling_p = td_score / self.tree.total_td_score
 
-            #  IS = (1/N * 1/P(i))**b /max wi == (N*P(i))**-b  /max wi
+            # apply weight adjustment
             weight[i,0] = (1/sampling_p * 1/self.leaves_count)**p_replay_beta
 
             sample_ind[i] = leaf_index
@@ -129,7 +124,12 @@ class ReplayBuffer:
             d_samp.append(data.dones)
             ns_samp.append(data.next_states)
 
-        weight_n = toTorch(weight/np.max(weight)).mean() #change form
+        # Calculating the max_weight
+        p_max = np.max(self.tree.tree[-self.buffer_size:]) / self.tree.total_td_score
+        if p_max == 0: p_max = td_eps # avoid div by zero
+        max_weight = (1/p_max * 1/self.leaves_count)**p_replay_beta
+
+        weight_n = toTorch(weight/max_weight) #normalize weight
 
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, weight_n, sample_ind)
 

@@ -13,7 +13,7 @@ from sa_ddpg import DDPGAgent
 from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
-BUFFER_SIZE = int(5e5)                   # size of memory replay buffer
+BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
 BATCH_SIZE = 512                         # min batch size
 MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
 LR_ACTOR = 1e-4                          # learning rate
@@ -35,7 +35,7 @@ NOISE_DECAY_EVERY = 5                    # noise decay step
 TARGET_NOISE = False                     # target network add noise?
 #NOISE_RESET_EVERY = int(1e3)            # noise reset step
 #USE_BATCHNORM = True                    # use batch norm?
-REWARD_SCALE = 100.0                     # use reward scaling
+REWARD_SCALE = 1.0                       # use reward scaling
 REWARD_NORM = False                      # use reward normalizer
 CRITIC_ACT_FORM = 1                      # [1,2,3] actions form for critic network (testing)
 
@@ -169,10 +169,6 @@ class MADDPG:
 
         # add experience of EACH agent to it's corresponding memory
         for ai in range(self.num_agents):
-            #print(toTorch(states[ai]).shape,
-            #      actions[ai].shape, toTorch(rewards[ai]).unsqueeze(-1).shape,
-            #      toTorch(dones[ai]).unsqueeze(-1).shape,
-            #      toTorch(next_states[ai]).shape)
             e = self.data(toTorch(states[ai]), #@ state_size torch.Size([24])
                           actions[ai], #@ tensor: action_size torch.Size([2])
                           toTorch(rewards[ai]).unsqueeze(-1), #@ 1 torch.Size([1])
@@ -195,24 +191,21 @@ class MADDPG:
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
                     # learn by each agent
+                    agents_inputs = self.get_all_samples()
                     for ai in range(self.num_agents): #do it agent by agent
-                        agents_inputs = self.get_all_samples()
                         self.learn(agents_inputs, ai)
 
             if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY == 0:
                 self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
-                #self.noise_scale *= NOISE_WGT_DECAY
 
-            #if self.t_step % NOISE_RESET_EVERY == 0:
-            #    self.noise_reset()
+            if self.t_step % UPDATE_EVERY == 0:
+                self.soft_update() #soft update target networks params
 
-            if self.t_step % UPDATE_EVERY == 0: #soft update target networks params
-                self.update_targets()
-
-            if USE_PER and self.p_replay_beta < 1.0: #weight adjustment
+            if USE_PER and self.p_replay_beta < 1.0: #weight increase to 1. eventually
                 self.p_replay_beta = min(1.0, self.p_replay_beta + P_BETA_DELTA)
 
         self.t_step += 1
+
 
     def get_all_samples(self):
         """generates inputs from all agents for actor/critic network to learn"""
@@ -311,9 +304,12 @@ class MADDPG:
         assert(td_current.requires_grad==True)
 
         # 3) compute the critic loss by minimizing td error
-        if USE_PER: td_error = torch.abs(td_target.detach() - td_current)
-
-        critic_loss = w[agent_id] * F.mse_loss(td_current, td_target.detach())
+        if USE_PER:
+            td_error = torch.abs(td_target.detach() - td_current)
+            critic_loss = w[agent_id] * 0.5 * td_error.pow(2)
+            critic_loss = critic_loss.mean()
+        else:
+            critic_loss = w[agent_id] * F.mse_loss(td_current, td_target.detach())
 
         agent.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -368,7 +364,8 @@ class MADDPG:
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
         agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions, latest_actions[agent_id]
-        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full).mean()
+        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full)
+        actor_loss = actor_loss.mean()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
         agent.actor_optimizer.step()
@@ -380,10 +377,10 @@ class MADDPG:
         # track historical data
         self.ag_history.append(-actor_loss.mean().data.detach())
         self.cl_history.append(critic_loss.mean().data.detach())
-        self.td_history.append(td_error.mean().detach().numpy())
+        if USE_PER: self.td_history.append(td_error.mean().detach().numpy())
 
 
-    def update_targets(self):
+    def soft_update(self):
         """soft update targets"""
         for agent in self.agents_list:
             soft_update(agent.actor_target, agent.actor_local, TAU)
