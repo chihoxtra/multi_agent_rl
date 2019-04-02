@@ -23,9 +23,9 @@ class DDPGAgent:
         self.agent_id = agent_id
 
         # num_agents*action_size
-        self.actor_local = ActorNet(1*state_size, hidden_actor, action_size, seed=seed).to(device)
+        self.actor_local = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_local = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
-        self.actor_target = ActorNet(1*state_size, hidden_actor, action_size, seed=seed).to(device)
+        self.actor_target = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_target = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
 
         # initialize targets same as original networks
@@ -33,22 +33,35 @@ class DDPGAgent:
         hard_update(self.critic_target, self.critic_local)
 
         self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor)
-        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=1.e-5) #weight_decay=1.e-5
+        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic) #weight_decay=1.e-5
 
         self.memory = ReplayBuffer(buffer_size, num_agents, state_size, action_size, use_PER)
 
+        self.actor_target.eval() #wont be training target net
+        self.critic_target.eval()
 
-    def _act(self, obs, use_bn=False):
+
+    def _act(self, obs):
         obs = obs.to(device)
-        if len(obs.shape)==1: use_bn = False #1D tensor cannot do batchnorm
 
-        return self.actor_local(obs, use_bn=use_bn)
+        if len(obs.shape)==1: obs = obs.unsqueeze(0) #for batchnorm
 
-    def _target_act(self, obs, use_bn=False):
+        self.actor_local.eval()
+        with torch.no_grad():
+            action_local = self.actor_local(obs).squeeze()
+        self.actor_local.train()
+
+        return action_local #tensor, action_size torch.Size([2])
+
+    def _target_act(self, obs):
         obs = obs.to(device)
-        if len(obs.shape)==1: use_bn = False #1D tensor cannot do batchnorm
 
-        return self.actor_target(obs, use_bn=use_bn)
+        if len(obs.shape)==1: obs = obs.unsqueeze(0) #for batchnorm
+
+        with torch.no_grad():
+            action_target = self.actor_target(obs).squeeze()
+
+        return action_target
 
 class ReplayBuffer:
     def __init__(self, buffer_size, num_agents, state_size, action_size, use_PER=False):
@@ -65,12 +78,14 @@ class ReplayBuffer:
             self.memory = deque(maxlen=buffer_size)
 
         self.buffer_size = buffer_size
-        self.p_replay_alpha = 0.7
         self.leaves_count = 0
 
-    def add_tree(self, e, td_error=1.0):
+    def add_tree(self, data, td_default=1.0):
         """PER function. Add a new experience to memory. td_error: abs value"""
-        self.tree.add(td_error, e)
+        td_error = np.max(self.tree.tree[-self.buffer_size:])
+        if td_error == 0.0:
+            td_error = td_default
+        self.tree.add(td_error, data)
         self.leaves_count = min(self.leaves_count+1,self.buffer_size)
 
     def add(self, data):
@@ -101,7 +116,6 @@ class ReplayBuffer:
             # Experience that correspond to each value is retrieved
             leaf_index, td_score, data = self.tree.get_leaf(value)
 
-            #P(j)
             sampling_p = td_score / self.tree.total_td_score
 
             #  IS = (1/N * 1/P(i))**b /max wi == (N*P(i))**-b  /max wi
