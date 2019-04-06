@@ -28,17 +28,17 @@ class DDPGAgent:
         self.actor_target = ActorNet(state_size, hidden_actor, action_size, seed=seed).to(device)
         self.critic_target = CriticNet(num_agents*state_size, num_agents*action_size, hidden_critic, 1, seed=seed).to(device)
 
-        # initialize targets same as original networks
-        hard_update(self.actor_target, self.actor_local)
-        hard_update(self.critic_target, self.critic_local)
-
         self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor)
         self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=0.) #weight_decay=1.e-5
 
         self.memory = ReplayBuffer(buffer_size, num_agents, state_size, action_size, use_PER)
 
-        self.actor_target.eval() #wont be training target net
-        self.critic_target.eval()
+        # initialize targets same as original networks
+        hard_update(self.actor_target, self.actor_local)
+        hard_update(self.critic_target, self.critic_local)
+
+        #self.actor_target.eval() #wont be training target net
+        #self.critic_target.eval()
 
 
     def _act(self, obs):

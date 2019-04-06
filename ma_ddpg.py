@@ -13,13 +13,13 @@ from sa_ddpg import DDPGAgent
 from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
-BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
+BUFFER_SIZE = int(3e5)                   # size of memory replay buffer
 BATCH_SIZE = 256                         # min batch size
 MIN_BUFFER_SIZE = int(1e4)               # min buffer size before replay
-LR_ACTOR = 1e-3                          # learning rate
+LR_ACTOR = 1e-4                          # learning rate
 LR_CRITIC = 1e-3                         # learning rate
-UNITS_ACTOR = (128,128)                  # number of hidden units for actor inner layers
-UNITS_CRITIC = (128,128)                 # number of hidden units for critic inner layers
+UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
+UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 20                          # how often to learn per step
@@ -42,7 +42,7 @@ REWARD_NORM = False                      # use reward normalizer
 
 ### PER related params, testing only
 USE_PER = False                         # flag indicates use of PER
-P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
+P_REPLAY_ALPHA = 0.5                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.5                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
 TD_DEFAULT = 1.0                         # default TD error value
@@ -265,11 +265,10 @@ class MADDPG:
         ns_a = self._target_acts(ns) #input list of len num_agents [batch_size x state_size]
 
         ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
-
         assert(ns_a_full.requires_grad==False)
 
-        with torch.no_grad(): #TESTING ns_a_full ns_a_full ns_a[agent_id]
-            q_next_target = agent.critic_target(ns_full, ns_a_full).to(device)
+        #with torch.no_grad(): #TESTING ns_a_full ns_a_full ns_a[agent_id]
+        q_next_target = agent.critic_target(ns_full, ns_a_full).to(device)
 
         td_target = r[agent_id] + GAMMA * q_next_target * (1.-d[agent_id]) #batchsize x 1
 
@@ -308,7 +307,6 @@ class MADDPG:
         # combine latest actions prediction from 2 agents -> full actions
 
         latest_action_full = torch.cat(latest_actions, dim=-1).to(device)
-
         assert(latest_action_full.requires_grad==True)
 
         # 2) actions (by actor local network) feed to local critic for score
