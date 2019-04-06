@@ -20,7 +20,10 @@ class ActorNet(nn.Module):
         self.fc2 = nn.Linear(hidden_dim[0],hidden_dim[1])
         self.bn2 = nn.BatchNorm1d(hidden_dim[1])
 
-        self.fc3 = nn.Linear(hidden_dim[-1],output_dim)
+        #self.fc3 = nn.Linear(hidden_dim[1],hidden_dim[-1])
+        #self.bn3 = nn.BatchNorm1d(hidden_dim[-1])
+
+        self.fc4 = nn.Linear(hidden_dim[-1],output_dim)
 
         self.activation = f.relu # relu
 
@@ -29,7 +32,8 @@ class ActorNet(nn.Module):
     def reset_parameters(self):
         self.fc1.weight.data.uniform_(*hidden_init(self.fc1))
         self.fc2.weight.data.uniform_(*hidden_init(self.fc2))
-        self.fc3.weight.data.uniform_(-3e-3, 3e-3)
+        #self.fc3.weight.data.uniform_(*hidden_init(self.fc2))
+        self.fc4.weight.data.uniform_(-3e-3, 3e-3)
 
     def forward(self, x):
         # batchnorm before activation
@@ -37,12 +41,15 @@ class ActorNet(nn.Module):
 
         h2 = self.activation(self.bn2(self.fc2(h1)))
 
-        a = torch.tanh(self.fc3(h2)) #removed torch.clamp
+        #h3 = self.activation(self.bn3(self.fc3(h2)))
+
+        a = torch.tanh(self.fc4(h2)) #removed torch.clamp
         return a
 
 
 class CriticNet(nn.Module):
-    def __init__(self, full_state_dim, full_action_dim, hidden_dim, output_dim, seed=0):
+    def __init__(self, full_state_dim, full_action_dim, hidden_dim, output_dim,
+                 seed=0, output_act=False):
 
         super(CriticNet, self).__init__()
         self.seed = torch.manual_seed(seed)
@@ -53,17 +60,23 @@ class CriticNet(nn.Module):
         self.fc2 = nn.Linear(hidden_dim[0]+full_action_dim, hidden_dim[1])
         self.bn2 = nn.BatchNorm1d(hidden_dim[1])
 
-        self.fc3 = nn.Linear(hidden_dim[-1],output_dim)
+        #self.fc3 = nn.Linear(hidden_dim[1], hidden_dim[-1])
+        #self.bn3 = nn.BatchNorm1d(hidden_dim[-1])
+
+        self.fc4 = nn.Linear(hidden_dim[-1],output_dim)
 
         self.activation = f.relu
         #self.PReLU = nn.PReLU() # leaky relu
+        self.output_act = output_act
+        print("critic output use activation: ", output_act)
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.fc1.weight.data.uniform_(*hidden_init(self.fc1))
         self.fc2.weight.data.uniform_(*hidden_init(self.fc2))
-        self.fc3.weight.data.uniform_(-3e-3, 3e-3)
+        #self.fc3.weight.data.uniform_(*hidden_init(self.fc2))
+        self.fc4.weight.data.uniform_(-3e-3, 3e-3)
 
     def forward(self, full_s, full_a):
         # critic network simply outputs a number
@@ -74,5 +87,8 @@ class CriticNet(nn.Module):
 
         m2 = self.activation(self.bn2(self.fc2(m1)))
 
-        v = self.fc3(m2)
+        #m3 = self.activation(self.bn3(self.fc3(m2)))
+
+        v = self.fc4(m2)
+        if self.output_act: v = self.activation(v)
         return v

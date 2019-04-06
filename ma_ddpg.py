@@ -14,38 +14,39 @@ from OUNoise import OUNoise
 from utilities import toTorch, soft_update
 
 BUFFER_SIZE = int(1e6)                   # size of memory replay buffer
-BATCH_SIZE = 512                         # min batch size
-MIN_BUFFER_SIZE = int(1e3)               # min buffer size before replay
-LR_ACTOR = 1e-4                          # learning rate
-LR_CRITIC = 1e-4                         # learning rate
-UNITS_ACTOR = (512,256)                  # number of hidden units for actor inner layers
-UNITS_CRITIC = (512,256)                 # number of hidden units for critic inner layers
+BATCH_SIZE = 256                         # min batch size
+MIN_BUFFER_SIZE = int(1e4)               # min buffer size before replay
+LR_ACTOR = 1e-3                          # learning rate
+LR_CRITIC = 1e-3                         # learning rate
+UNITS_ACTOR = (128,128)                  # number of hidden units for actor inner layers
+UNITS_CRITIC = (128,128)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
-LEARN_EVERY = 20                         # how often to learn per step
-LEARN_LOOP = 10                          # how many learning cycle per learn
-UPDATE_EVERY = 10                        # how many steps before updating the network
+LEARN_EVERY = 20                          # how often to learn per step
+LEARN_LOOP = 15                           # how many learning cycle per learn
+#UPDATE_EVERY = 10                        # how many steps before updating the network
 USE_OUNOISE = True                       # use OUnoise or else Gaussian noise
-NOISE_WGT_PRETRAIN = 0.2                 # noise scaling weight before training
+OUNOISE_SIGMA = 0.05                      # signma value for OUnoise
 NOISE_WGT_INIT = 1.0                     # noise scaling weight
+NOISE_WGT_PRETRAIN = NOISE_WGT_INIT      # noise scaling weight before training
 NOISE_WGT_DECAY = 0.9995                 # noise decay rate per STEP
-NOISE_WGT_MIN = 0.15                     # min noise scale
+NOISE_WGT_MIN = 0.1                      # min noise scale
 NOISE_DC_START = MIN_BUFFER_SIZE         # when to start noise
-NOISE_DECAY_EVERY = 5                    # noise decay step
+#NOISE_DECAY_EVERY = 2                    # noise decay step
 TARGET_NOISE = False                     # target network add noise?
 #NOISE_RESET_EVERY = int(1e3)            # noise reset step
 #USE_BATCHNORM = True                    # use batch norm?
 REWARD_SCALE = 1.0                       # use reward scaling
 REWARD_NORM = False                      # use reward normalizer
-CRITIC_ACT_FORM = 1                      # [1,2,3] actions form for critic network (testing)
+#CRITIC_ACT_FORM = 1                      # [1,2,3] actions form for critic network (testing)
 
 ### PER related params, testing only
-USE_PER = True                           # flag indicates use of PER
+USE_PER = False                         # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.5                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
 TD_DEFAULT = 1.0                         # default TD error value
-TD_EPS = 1e-3                            # minimal td value to avoid zero prob.
+TD_EPS = 1e-4                            # minimal td value to avoid zero prob.
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -71,7 +72,7 @@ class MADDPG:
         self.data = namedtuple("data", field_names=["states", "actions", "rewards",
                                                     "dones", "next_states"])
         # noise
-        self.noise = OUNoise(action_size)
+        self.noise = OUNoise(action_size, sigma=OUNOISE_SIGMA)
         self.noise_scale = NOISE_WGT_PRETRAIN
 
         self.learn_every = LEARN_EVERY
@@ -102,14 +103,19 @@ class MADDPG:
         print("LEARN_LOOP: ", LEARN_LOOP)
         print("UNITS_ACTOR: ", UNITS_ACTOR)
         print("UNITS_CRITIC: ", UNITS_CRITIC)
+        print("USE_OUNOISE: ", USE_OUNOISE)
         print("NOISE_WGT_INIT: ", NOISE_WGT_INIT)
+        print("OUNOISE_SIGMA: ", OUNOISE_SIGMA)
         print("NOISE_WGT_DECAY: ", NOISE_WGT_DECAY)
-        print("NOISE_DECAY_EVERY: ", NOISE_DECAY_EVERY)
+        print("NOISE_DC_START: ", NOISE_DC_START)
         print("NOISE_WGT_MIN: ", NOISE_WGT_MIN)
         print("TARGET_NOISE: ", TARGET_NOISE)
         print("USE_PER: ", USE_PER)
+        print("P_REPLAY_ALPHA: ", P_REPLAY_ALPHA)
+        print("P_REPLAY_BETA: ", P_REPLAY_BETA)
         #print("USE_BATCHNORM: ", USE_BATCHNORM)
-        print("CRITIC_ACT_FORM: ", CRITIC_ACT_FORM)
+        #print("CRITIC_ACT_FORM: ", CRITIC_ACT_FORM)
+        print("")
 
     def add_noise(self):
         if USE_OUNOISE:
@@ -129,13 +135,12 @@ class MADDPG:
         obs_all_agents = toTorch(obs_all_agents) #np->tensor: num_agents x space_size (24)
 
         actions = []
+        noise = self.add_noise().to(device)
         for ai in range(self.num_agents):
             agent = self.agents_list[ai]
-            noise = self.add_noise() #add noise individually
             action = agent._act(obs_all_agents[ai]) + noise.to(device)
             actions.append(action) #@ action_size torch.Size([2])
-
-            self.noise_history.append(noise.abs().mean()) #keep track noise trend
+            self.noise_history.append(noise.abs().mean().numpy()) #keep track noise trend
 
         return actions
 
@@ -146,11 +151,11 @@ class MADDPG:
            outputs: (list) len = num_agents @each tensor: batch size x action_size
         """
         target_actions = []
+        if TARGET_NOISE: noise = self.add_noise().to(device)
         for ai in range(self.num_agents):
             agent = self.agents_list[ai]
             target_action = agent._target_act(obs_all_agents[ai])
-            if TARGET_NOISE: #add noise in target network?
-                target_action +=  self.add_noise().to(device)
+            if TARGET_NOISE: target_action += noise
             target_actions.append(target_action)
 
         return target_actions #list of num_agents; @batchsize x action size
@@ -191,15 +196,12 @@ class MADDPG:
             if self.t_step % LEARN_EVERY == 0:
                 for _ in range(LEARN_LOOP):
                     # learn by each agent
-                    agents_inputs = self.get_all_samples()
                     for ai in range(self.num_agents): #do it agent by agent
+                        agents_inputs = self.get_all_samples()
                         self.learn(agents_inputs, ai)
 
-            if self.t_step >= NOISE_DC_START and self.t_step % NOISE_DECAY_EVERY == 0:
-                self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
-
-            if self.t_step % UPDATE_EVERY == 0:
-                self.soft_update() #soft update target networks params
+            #if self.t_step % UPDATE_EVERY == 0:
+            #   self.soft_update() #soft update target networks params
 
             if USE_PER and self.p_replay_beta < 1.0: #weight increase to 1. eventually
                 self.p_replay_beta = min(1.0, self.p_replay_beta + P_BETA_DELTA)
@@ -257,41 +259,13 @@ class MADDPG:
         agent = self.agents_list[agent_id]
 
         ####################### CRITIC LOSS #########################
-        """
-        update params of critic network by minimizing td error
-        td target = expected Q value using the critic target network
-                    reward of this timestep + discount * Q_target(st+1,at+1)
-                                                         from target network
-        td current = current Q
-        critic loss = mse(td_target - td_current)
-        """
+
         # 1) compute td target using ACTOR TARGET network in: ns->ns actions
         # method 1) use next state actions from 2 agents
         ns_a = self._target_acts(ns) #input list of len num_agents [batch_size x state_size]
-        if CRITIC_ACT_FORM == 1:
-            ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
-        """
-        ### TEST OF CONCEPTS ###
-        # method 2) next state action of THIS agent + current action of OTHER agents
-        if CRITIC_ACT_FORM == 2:
-            ns_a_full = [] #ai==0: (ns0, a1); ai==1: (a0,ns1);from a0 a1
-            for ai in range(self.num_agents):
-                if ai == agent_id:
-                    ns_a_full.append(ns_a[ai].to(device))
-                else:
-                    ns_a_full.append(a[ai].to(device))
-            ns_a_full = torch.cat((ns_a_full),dim=-1)
 
-        # method 3) next state action of THIS agent + current action of THIS agent
-        if CRITIC_ACT_FORM == 3:
-            ns_a_full = [] #ai==0: (ns0, a0); ai==1: (a1,ns1);from a0 a1
-            for ai in range(self.num_agents):
-                if ai == agent_id:
-                    ns_a_full.append(ns_a[agent_id].to(device))
-                else:
-                    ns_a_full.append(a[agent_id].to(device))
-            ns_a_full = torch.cat((ns_a_full),dim=-1)
-        """
+        ns_a_full = torch.cat(ns_a, dim=-1).to(device) #batch_size x (action sizexnum_agents)
+
         assert(ns_a_full.requires_grad==False)
 
         with torch.no_grad(): #TESTING ns_a_full ns_a_full ns_a[agent_id]
@@ -309,7 +283,7 @@ class MADDPG:
             critic_loss = w[agent_id] * 0.5 * td_error.pow(2)
             critic_loss = critic_loss.mean()
         else:
-            critic_loss = w[agent_id] * F.mse_loss(td_current, td_target.detach())
+            critic_loss = F.mse_loss(td_current, td_target.detach())
 
         agent.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -332,39 +306,17 @@ class MADDPG:
             latest_actions.append(latest_a.to(device))
 
         # combine latest actions prediction from 2 agents -> full actions
-        if CRITIC_ACT_FORM == 1:
-            latest_action_full = torch.cat(latest_actions, dim=-1).to(device)
 
-        """
-        ### TESTING # get action and latest predicted action for this agent
-        # method 2) use next state action of THIS agent + current action of other agents
-        if CRITIC_ACT_FORM == 2:
-            latest_action_full = []
-            for ai in range(self.num_agents):
-                if ai == agent_id:
-                    latest_action_full.append(latest_actions[ai].to(device))
-                else:
-                    latest_action_full.append(a[ai].to(device))
-            latest_action_full = torch.cat(latest_action_full,dim=-1).to(device)
+        latest_action_full = torch.cat(latest_actions, dim=-1).to(device)
 
-        # method 3) next state of THIS agent + current action of THIS agent
-        if CRITIC_ACT_FORM == 3:
-            latest_action_full = []
-            for ai in range(self.num_agents):
-                if ai == agent_id:
-                    latest_action_full.append(latest_actions[agent_id].to(device))
-                else:
-                    latest_action_full.append(a[agent_id].to(device))
-
-            latest_action_full = torch.cat(latest_action_full,dim=-1).to(device)
-        """
         assert(latest_action_full.requires_grad==True)
 
         # 2) actions (by actor local network) feed to local critic for score
         # input ful states and full actions to local critic
         # maximize Q score by gradient asscent
         agent.actor_optimizer.zero_grad() #TESTING(down) #latest_action_full, _mixed_actions, latest_actions[agent_id]
-        actor_loss = w[agent_id] * -agent.critic_local(s_full, latest_action_full)
+        actor_loss = -agent.critic_local(s_full, latest_action_full)
+        if USE_PER: actor_loss *= w[agent_id]
         actor_loss = actor_loss.mean()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(agent.actor_local.parameters(),1.0)
@@ -378,6 +330,11 @@ class MADDPG:
         self.ag_history.append(-actor_loss.mean().data.detach())
         self.cl_history.append(critic_loss.mean().data.detach())
         if USE_PER: self.td_history.append(td_error.mean().detach().numpy())
+
+        self.soft_update() #soft update target networks params
+
+        if self.t_step >= NOISE_DC_START: #and self.t_step % NOISE_DECAY_EVERY == 0
+            self.noise_scale = max(self.noise_scale * NOISE_WGT_DECAY, NOISE_WGT_MIN)
 
 
     def soft_update(self):

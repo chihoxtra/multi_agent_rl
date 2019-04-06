@@ -33,7 +33,7 @@ class DDPGAgent:
         hard_update(self.critic_target, self.critic_local)
 
         self.actor_optimizer = Adam(self.actor_local.parameters(), lr=lr_actor)
-        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic) #weight_decay=1.e-5
+        self.critic_optimizer = Adam(self.critic_local.parameters(), lr=lr_critic, weight_decay=0.) #weight_decay=1.e-5
 
         self.memory = ReplayBuffer(buffer_size, num_agents, state_size, action_size, use_PER)
 
@@ -104,7 +104,7 @@ class ReplayBuffer:
 
         for i in range(batch_size):
             # A value is uniformly sample from each range
-            _start, _end = i * td_score_segment, (i + 1) * td_score_segment
+            _start, _end = i * td_score_segment, (i+1) * td_score_segment
             value = np.random.uniform(_start, _end)
 
             # get the experience with the closest value in that segment
@@ -124,12 +124,13 @@ class ReplayBuffer:
             d_samp.append(data.dones)
             ns_samp.append(data.next_states)
 
-        # Calculating the max_weight
-        p_max = np.max(self.tree.tree[-self.buffer_size:]) / self.tree.total_td_score
-        if p_max == 0: p_max = td_eps # avoid div by zero
-        max_weight = (1/p_max * 1/self.leaves_count)**p_replay_beta
+        # Calculating the max_weight among entire memory
+        #p_max = np.max(self.tree.tree[-self.buffer_size:]) / self.tree.total_td_score
+        #if p_max == 0: p_max = td_eps # avoid div by zero
+        #max_weight_t = (1/p_max * 1/self.leaves_count)**p_replay_beta
+        #max_weight = np.max(weight)
 
-        weight_n = toTorch(weight/max_weight) #normalize weight
+        weight_n = toTorch(weight) #normalize weight /max_weight
 
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, weight_n, sample_ind)
 
@@ -155,7 +156,7 @@ class ReplayBuffer:
         # last 2 values for functions compatibility with PER
         return (s_samp, a_samp, r_samp, d_samp, ns_samp, 1.0, [])
 
-    def update_tree(self, td_updated, index, p_replay_alpha, td_eps):
+    def update_tree(self, td_updated, index, p_replay_alpha, td_eps=1e-4):
         """ PER function.
         update the td error values while restoring orders
         td_updated: abs value; np.array of shape 1,batch_size,1
