@@ -52,12 +52,7 @@ Here are a summary of the hyper parameters used:
 #### The Result:
 After soooooo many different trial and errors, the MADDPG agent is able to solve the environment (average score over 100 episodes across max of 2 agents > 0.5) in episode 1537.<P>
 
-![Average Reward over 100 episodes across the max scores of 2 agents](https://github.com/chihoxtra/continuous_actions_rl/blob/master/graph.png)
-
-![Trained Agent Capture](https://github.com/chihoxtra/continuous_actions_rl/blob/master/reacher_final_20agents_38score.gif)
-
-[Video of the trained agent](https://youtu.be/hlC8Ttg320c)
+![Average Reward over 100 episodes across the max scores of 2 agents](https://github.com/chihoxtra/multi_agent_rl/blob/master/tennis_scores.png)
 
 #### Future Ideas:
 - Implementation of prioritized replay for faster learning
-- Use PPO (actor critic style) instead of DDPG as it is known to provide even better result.
