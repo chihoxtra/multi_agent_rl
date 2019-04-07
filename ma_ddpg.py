@@ -16,10 +16,10 @@ from utilities import toTorch, soft_update
 BUFFER_SIZE = int(3e5)                   # size of memory replay buffer
 BATCH_SIZE = 256                         # min batch size
 MIN_BUFFER_SIZE = int(1e4)               # min buffer size before replay
-LR_ACTOR = 1e-4                          # learning rate
+LR_ACTOR = 5e-4                          # learning rate
 LR_CRITIC = 1e-3                         # learning rate
-UNITS_ACTOR = (256,128)                  # number of hidden units for actor inner layers
-UNITS_CRITIC = (256,128)                 # number of hidden units for critic inner layers
+UNITS_ACTOR = (512,256)                  # number of hidden units for actor inner layers
+UNITS_CRITIC = (512,256)                 # number of hidden units for critic inner layers
 GAMMA = 0.99                             # discount factor
 TAU = 1e-3                               # soft network update
 LEARN_EVERY = 20                          # how often to learn per step
