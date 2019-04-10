@@ -41,7 +41,7 @@ REWARD_NORM = False                      # use reward normalizer
 #CRITIC_ACT_FORM = 1                      # [1,2,3] actions form for critic network (testing)
 
 ### PER related params, testing only
-USE_PER = True                         # flag indicates use of PER
+USE_PER = False                          # flag indicates use of PER
 P_REPLAY_ALPHA = 0.7                     # power discount factor for samp. prob.
 P_REPLAY_BETA = 0.5                      # weight adjustmnet factor
 P_BETA_DELTA = 1e-4                      # beta 'increment' factor
@@ -135,9 +135,9 @@ class MADDPG:
         obs_all_agents = toTorch(obs_all_agents) #np->tensor: num_agents x space_size (24)
 
         actions = []
-        noise = self.add_noise().to(device)
         for ai in range(self.num_agents):
             agent = self.agents_list[ai]
+            noise = self.add_noise().to(device)
             action = agent._act(obs_all_agents[ai]) + noise.to(device)
             actions.append(action) #@ action_size torch.Size([2])
             self.noise_history.append(noise.abs().mean().numpy()) #keep track noise trend

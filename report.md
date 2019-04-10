@@ -54,5 +54,7 @@ After soooooo many different trial and errors, the MADDPG agent is able to solve
 
 ![Average Reward over 100 episodes across the max scores of 2 agents](https://github.com/chihoxtra/multi_agent_rl/blob/master/tennis_scores.png)
 
+[Watch my trained agent(s) in action](https://youtu.be/IA2EcOPUNck)
+
 #### Future Ideas:
 - Implementation of prioritized replay for faster learning
